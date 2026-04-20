@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hydraulic & Thermodynamic Simulator</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-bg: #1e1e1e;
+            --border-color: #333;
+            --text-main: #e0e0e0;
+            --text-muted: #888;
+            --accent: #007acc;
+            --accent-hover: #005f9e;
+            --node-bg: #252526;
+            --node-border: #444;
+            --port-color: #aaa;
+            --port-hover: #fff;
+            --link-color: #007acc;
+            --danger: #cc3333;
+            --grid-color: rgba(255, 255, 255, 0.05);
+        }
+
+        [data-theme="light"] {
+            --bg-color: #f5f5f5;
+            --panel-bg: #ffffff;
+            --border-color: #ccc;
+            --text-main: #333333;
+            --text-muted: #666;
+            --accent: #005f9e;
+            --accent-hover: #007acc;
+            --node-bg: #ffffff;
+            --node-border: #bbb;
+            --port-color: #666;
+            --port-hover: #000;
+            --link-color: #005f9e;
+            --danger: #e60000;
+            --grid-color: rgba(0, 0, 0, 0.05);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { background-color: var(--bg-color); color: var(--text-main); height: 100vh; display: flex; flex-direction: column; overflow: hidden; transition: background-color 0.3s, color 0.3s; }
+        
+        /* Header */
+        header { height: 50px; background-color: var(--panel-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 20px; justify-content: space-between; z-index: 10; }
+        .header-title { font-weight: bold; font-size: 1.2rem; display: flex; align-items: center; gap: 10px; }
+        .toolbar { display: flex; gap: 10px; }
+        button { background-color: var(--accent); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; transition: background 0.2s; }
+        button:hover { background-color: var(--accent-hover); }
+        button.danger { background-color: var(--danger); }
+        
+        /* Main Layout */
+        .main-container { display: flex; flex: 1; height: calc(100vh - 50px); }
+        
+        /* Sidebars */
+        .sidebar { width: 260px; background-color: var(--panel-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; z-index: 5; }
+        .sidebar.right { border-right: none; border-left: 1px solid var(--border-color); }
+        .sidebar-header { padding: 15px; font-weight: bold; border-bottom: 1px solid var(--border-color); background-color: rgba(0,0,0,0.1); }
+        .sidebar-content { flex: 1; overflow-y: auto; padding: 10px; }
+        
+        /* Palette Items */
+        .palette-item { background-color: var(--node-bg); border: 1px solid var(--node-border); padding: 10px; margin-bottom: 10px; border-radius: 6px; cursor: grab; user-select: none; transition: border-color 0.2s; }
+        .palette-item:hover { border-color: var(--accent); }
+        .palette-item-title { font-size: 0.9rem; font-weight: bold; margin-bottom: 4px; }
+        .palette-item-desc { font-size: 0.75rem; color: var(--text-muted); }
+
+        /* Canvas */
+        .canvas-container { flex: 1; position: relative; overflow: hidden; background-image: linear-gradient(var(--grid-color) 1px, transparent 1px), linear-gradient(90deg, var(--grid-color) 1px, transparent 1px); background-size: 20px 20px; }
+        #svg-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+        .link-path { fill: none; stroke: var(--link-color); stroke-width: 4; stroke-linecap: round; transition: stroke 0.3s; pointer-events: stroke; cursor: pointer; }
+        .link-path:hover { stroke-width: 6; }
+        .link-anim { fill: none; stroke: rgba(255,255,255,0.6); stroke-width: 2; stroke-dasharray: 10, 10; pointer-events: none; }
+        [data-theme="light"] .link-anim { stroke: rgba(0,0,0,0.4); }
+
+        /* Nodes */
+        .node { position: absolute; background-color: var(--node-bg); border: 1px solid var(--node-border); border-radius: 8px; width: 160px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 2; user-select: none; display: flex; flex-direction: column; }
+        .node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+        .node-header { padding: 8px; background-color: rgba(0,0,0,0.2); border-bottom: 1px solid var(--node-border); font-size: 0.85rem; font-weight: bold; cursor: grab; border-radius: 8px 8px 0 0; text-align: center; }
+        .node-body { padding: 10px; font-size: 0.75rem; color: var(--text-muted); display: flex; flex-direction: column; gap: 4px; }
+        .node-stat { display: flex; justify-content: space-between; }
+        .node-stat span:last-child { color: var(--text-main); font-family: monospace; }
+        
+        /* Ports */
+        .port { position: absolute; width: 12px; height: 12px; background-color: var(--port-color); border: 2px solid var(--node-bg); border-radius: 50%; cursor: crosshair; z-index: 3; transform: translate(-50%, -50%); transition: transform 0.2s, background-color 0.2s; }
+        .port:hover { transform: translate(-50%, -50%) scale(1.5); background-color: var(--port-hover); }
+        .port-label { position: absolute; font-size: 0.6rem; color: var(--text-main); pointer-events: none; }
+
+        /* Interactive Elements in Nodes */
+        .valve-control { display: flex; justify-content: space-between; margin-top: 5px; background: rgba(0,0,0,0.2); border-radius: 4px; overflow: hidden; }
+        .valve-btn { flex: 1; padding: 4px 0; text-align: center; cursor: pointer; font-size: 0.7rem; border-right: 1px solid var(--node-border); }
+        .valve-btn:last-child { border: none; }
+        .valve-btn.active { background: var(--accent); color: white; }
+        .cylinder-bar { height: 6px; background: #333; border-radius: 3px; margin-top: 5px; overflow: hidden; position: relative; }
+        .cylinder-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.1s linear; }
+        .filter-warning { color: var(--danger); font-weight: bold; display: none; text-align: center; margin-top: 5px; }
+
+        /* Properties Panel */
+        .prop-group { margin-bottom: 15px; }
+        .prop-group label { display: block; font-size: 0.8rem; margin-bottom: 5px; color: var(--text-muted); }
+        .prop-group input { width: 100%; padding: 6px; background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 4px; }
+        .empty-props { text-align: center; color: var(--text-muted); font-size: 0.9rem; margin-top: 20px; }
+    </style>
+</head>
+<body data-theme="dark">
+
+    <header>
+        <div class="header-title">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            HydroSim Pro
+        </div>
+        <div class="toolbar">
+            <button id="btn-toggle-sim">Start Simulation</button>
+            <button id="btn-export">Export JSON</button>
+            <button id="btn-import">Import JSON</button>
+            <input type="file" id="file-import" style="display:none" accept=".json">
+            <button id="btn-theme">Toggle Theme</button>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- Component Palette -->
+        <div class="sidebar">
+            <div class="sidebar-header">Components</div>
+            <div class="sidebar-content" id="palette">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+
+        <!-- Canvas -->
+        <div class="canvas-container" id="canvas">
+            <svg id="svg-layer"></svg>
+            <!-- Nodes injected here -->
+        </div>
+
+        <!-- Properties Panel -->
+        <div class="sidebar right">
+            <div class="sidebar-header">Properties</div>
+            <div class="sidebar-content" id="properties-panel">
+                <div class="empty-props">Select a node or link to edit properties.</div>
+            </div>
+        </div>
+    </div>
+
+<script>
+/**
+ * HYDROSIM PRO - Core Engine & UI
+ * Zero-dependency physics simulator using Nodal Analysis (Gauss-Seidel).
+ */
+
+// --- UTILS ---
+const generateId = () => Math.random().toString(36).substr(2, 9);
+const clamp = (val, min, max) => Math.max(min, Math.min(max, val));
+
+// --- COMPONENT DEFINITIONS ---
+// Ports: x, y are relative percentages (0-1) for rendering on the node.
+const COMPONENT_TYPES = {
+    tank: {
+        name: "Fluid Tank", desc: "Ground reference (0 bar).",
+        ports: [{ id: 'T', label: 'T', x: 0.5, y: 0 }],
+        params: {}, state: {},
+        applyPhysics: (node, portsMap) => {
+            portsMap[node.id + '_T'].isFixed = true;
+            portsMap[node.id + '_T'].pressure = 0;
+        }
+    },
+    engine: {
+        name: "Thermic Engine", desc: "Outputs mechanical RPM.",
+        ports: [{ id: 'M', label: 'Mech', x: 1, y: 0.5 }],
+        params: { fuelRate: 50, efficiency: 0.8 }, state: {},
+        applyPhysics: (node, portsMap) => {
+            let rpm = node.params.fuelRate * node.params.efficiency * 40; // Dummy RPM calc
+            portsMap[node.id + '_M'].isFixed = true;
+            portsMap[node.id + '_M'].pressure = rpm; // Pressure = RPM in Mech analogy
+        }
+    },
+    pump: {
+        name: "Hydraulic Pump", desc: "Converts RPM to Flow.",
+        ports: [{ id: 'M', label: 'M', x: 0, y: 0.2 }, { id: 'IN', label: 'In', x: 0, y: 0.8 }, { id: 'OUT', label: 'Out', x: 1, y: 0.5 }],
+        params: { displacement: 20 }, state: {},
+        applyPhysics: (node, portsMap) => {
+            let pM = portsMap[node.id + '_M'], pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
+            let rpm = pM.pressure;
+            let flow = (rpm * node.params.displacement) / 1000; // L/min
+            // Flow source from IN to OUT
+            pIn.sum_Q -= flow; pOut.sum_Q += flow;
+            // Internal leakage to prevent math explosion if blocked
+            addConductance(pIn, pOut, 0.05);
+        }
+    },
+    motor: {
+        name: "Hydraulic Motor", desc: "Converts Flow to RPM.",
+        ports: [{ id: 'IN', label: 'In', x: 0, y: 0.2 }, { id: 'OUT', label: 'Out', x: 0, y: 0.8 }, { id: 'M', label: 'M', x: 1, y: 0.5 }],
+        params: { displacement: 20, loadResistance: 10 }, state: { rpm: 0 },
+        applyPhysics: (node, portsMap) => {
+            let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'], pM = portsMap[node.id + '_M'];
+            // Acts as a resistance to hydraulic flow
+            addConductance(pIn, pOut, 100 / node.params.loadResistance);
+            let flow = (pIn.pressure - pOut.pressure) * (100 / node.params.loadResistance);
+            node.state.rpm = (flow * 1000) / node.params.displacement;
+            pM.isFixed = true; pM.pressure = Math.max(0, node.state.rpm);
+        }
+    },
+    valve43: {
+        name: "Directional Valve", desc: "4/3-way spool valve.",
+        ports: [{ id: 'P', label: 'P', x: 0.2, y: 1 }, { id: 'T', label: 'T', x: 0.8, y: 1 }, { id: 'A', label: 'A', x: 0.2, y: 0 }, { id: 'B', label: 'B', x: 0.8, y: 0 }],
+        params: {}, state: { lever: 0 }, // -1: Left, 0: Center, 1: Right
+        applyPhysics: (node, portsMap) => {
+            let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'], pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
+            let G_open = 100, G_closed = 0.001;
+            if (node.state.lever === 1) { addConductance(pP, pB, G_open); addConductance(pA, pT, G_open); }
+            else if (node.state.lever === -1) { addConductance(pP, pA, G_open); addConductance(pB, pT, G_open); }
+            else { addConductance(pP, pT, G_closed); } // Closed center
+        }
+    },
+    cylinder: {
+        name: "Hydraulic Cylinder", desc: "Double-acting actuator.",
+        ports: [{ id: 'A', label: 'A', x: 0, y: 0.2 }, { id: 'B', label: 'B', x: 0, y: 0.8 }],
+        params: { volume: 5 }, state: { stroke: 0 }, // 0 to 100%
+        applyPhysics: (node, portsMap, dt) => {
+            let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
+            let G = 20; // Base conductance (friction)
+            if (node.state.stroke <= 0 && pA.pressure < pB.pressure) G = 0.001; // Bottomed out
+            if (node.state.stroke >= 100 && pA.pressure > pB.pressure) G = 0.001; // Max extended
+            addConductance(pA, pB, G);
+            
+            // Integrate position
+            let flow = (pA.pressure - pB.pressure) * G; // L/min
+            let flowPerSec = flow / 60;
+            node.state.stroke += (flowPerSec / node.params.volume) * 100 * dt;
+            node.state.stroke = clamp(node.state.stroke, 0, 100);
+        }
+    },
+    prv: {
+        name: "Relief Valve", desc: "Caps max pressure.",
+        ports: [{ id: 'P', label: 'P', x: 0, y: 0.5 }, { id: 'T', label: 'T', x: 1, y: 0.5 }],
+        params: { crackPressure: 150 }, state: {},
+        applyPhysics: (node, portsMap) => {
+            let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
+            let diff = pP.pressure - pT.pressure;
+            let G = 0.01;
+            if (diff > node.params.crackPressure) G = (diff - node.params.crackPressure) * 5;
+            addConductance(pP, pT, G);
+        }
+    },
+    pilotCheck: {
+        name: "Pilot Check Valve", desc: "Blocks reverse flow unless piloted.",
+        ports: [{ id: 'A', label: 'A', x: 0, y: 0.5 }, { id: 'B', label: 'B', x: 1, y: 0.5 }, { id: 'X', label: 'X', x: 0.5, y: 1 }],
+        params: { pilotRatio: 3 }, state: {},
+        applyPhysics: (node, portsMap) => {
+            let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'], pX = portsMap[node.id + '_X'];
+            let G = 0.001;
+            if (pA.pressure > pB.pressure || pX.pressure > (pB.pressure / node.params.pilotRatio)) G = 100;
+            addConductance(pA, pB, G);
+        }
+    },
+    flowDivider: {
+        name: "Flow Divider", desc: "Splits flow by ratio.",
+        ports: [{ id: 'IN', label: 'In', x: 0, y: 0.5 }, { id: 'A', label: 'A', x: 1, y: 0.2 }, { id: 'B', label: 'B', x: 1, y: 0.8 }],
+        params: { ratioA: 50 }, state: { gA: 10, gB: 10 },
+        applyPhysics: (node, portsMap) => {
+            let pIn = portsMap[node.id + '_IN'], pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
+            let qA = (pIn.pressure - pA.pressure) * node.state.gA;
+            let qB = (pIn.pressure - pB.pressure) * node.state.gB;
+            let targetRatio = node.params.ratioA / (100 - node.params.ratioA);
+            let currentRatio = qB === 0 ? targetRatio : qA / qB;
+            
+            if (currentRatio < targetRatio) { node.state.gA += 0.5; node.state.gB -= 0.5; }
+            else { node.state.gA -= 0.5; node.state.gB += 0.5; }
+            
+            node.state.gA = clamp(node.state.gA, 0.1, 100);
+            node.state.gB = clamp(node.state.gB, 0.1, 100);
+            addConductance(pIn, pA, node.state.gA);
+            addConductance(pIn, pB, node.state.gB);
+        }
+    },
+    filter: {
+        name: "Hydraulic Filter", desc: "Cleans fluid, can clog.",
+        ports: [{ id: 'IN', label: 'In', x: 0, y: 0.5 }, { id: 'OUT', label: 'Out', x: 1, y: 0.5 }],
+        params: { maxVolume: 1000 }, state: { volumePassed: 0, clogged: false },
+        applyPhysics: (node, portsMap, dt) => {
+            let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
+            let G = node.state.clogged ? 1 : 50;
+            addConductance(pIn, pOut, G);
+            let flow = Math.abs((pIn.pressure - pOut.pressure) * G);
+            node.state.volumePassed += (flow / 60) * dt;
+            if (node.state.volumePassed > node.params.maxVolume) node.state.clogged = true;
+        }
+    },
+    cooler: {
+        name: "Heat Exchanger", desc: "Cools fluid based on flow.",
+        ports: [{ id: 'IN', label: 'In', x: 0, y: 0.5 }, { id: 'OUT', label: 'Out', x: 1, y: 0.5 }],
+        params: { efficiency: 0.5 }, state: { coolingKw: 0 },
+        applyPhysics: (node, portsMap) => {
+            let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
+            let G = 30;
+            addConductance(pIn, pOut, G);
+            let flow = Math.abs((pIn.pressure - pOut.pressure) * G);
+            node.state.coolingKw = flow * node.params.efficiency * 0.1;
+        }
+    }
+};
+
+// --- STATE MANAGEMENT ---
+let appState = {
+    nodes: [],
+    links: [],
+    simRunning: false
+};
+
+let selection = { type: null, id: null }; // type: 'node' | 'link'
+let dragState = { isDragging: false, node: null, offsetX: 0, offsetY: 0 };
+let linkState = { isLinking: false, sourceNode: null, sourcePort: null, tempX: 0, tempY: 0 };
+
+// Transient Physics State
+let physicsPorts = {}; // Map of "nodeId_portId" -> { pressure, sum_G, sum_Q, connections: [] }
+
+// DOM Maps for performance
+const domNodes = new Map();
+const domLinks = new Map();
+
+// --- INITIALIZATION ---
+function init() {
+    buildPalette();
+    setupEventListeners();
+    requestAnimationFrame(mainLoop);
+}
+
+function buildPalette() {
+    const palette = document.getElementById('palette');
+    for (const [type, def] of Object.entries(COMPONENT_TYPES)) {
+        const el = document.createElement('div');
+        el.className = 'palette-item';
+        el.innerHTML = `<div class="palette-item-title">${def.name}</div><div class="palette-item-desc">${def.desc}</div>`;
+        el.draggable = true;
+        el.addEventListener('dragstart', (e) => {
+            e.dataTransfer.setData('text/plain', type);
+        });
+        palette.appendChild(el);
+    }
+}
+
+// --- PHYSICS ENGINE ---
+let lastTime = performance.now();
+
+function addConductance(p1, p2, G) {
+    p1.connections.push({ other: p2, G: G });
+    p2.connections.push({ other: p1, G: G });
+}
+
+function stepPhysics(dt) {
+    if (!appState.simRunning) return;
+
+    // 1. Initialize/Reset Ports
+    physicsPorts = {};
+    appState.nodes.forEach(n => {
+        COMPONENT_TYPES[n.type].ports.forEach(p => {
+            let pid = n.id + '_' + p.id;
+            physicsPorts[pid] = { pressure: n._lastP?.[p.id] || 0, sum_G: 0.0001, sum_Q: 0, connections: [], isFixed: false };
+        });
+    });
+
+    // 2. Apply Link Conductances
+    appState.links.forEach(l => {
+        let p1 = physicsPorts[l.sourceNode + '_' + l.sourcePort];
+        let p2 = physicsPorts[l.targetNode + '_' + l.targetPort];
+        if (p1 && p2) {
+            let G = Math.pow(l.params.diameter, 4) / (l.params.length || 1); // Hagen-Poiseuille simplified
+            addConductance(p1, p2, G);
+            l._G = G; // Store for flow calc
+        }
+    });
+
+    // 3. Apply Component Physics
+    appState.nodes.forEach(n => {
+        let def = COMPONENT_TYPES[n.type];
+        if (def.applyPhysics) def.applyPhysics(n, physicsPorts, dt);
+    });
+
+    // 4. Gauss-Seidel Iteration (Relaxation)
+    const portArray = Object.values(physicsPorts);
+    for (let iter = 0; iter < 40; iter++) {
+        for (let i = 0; i < portArray.length; i++) {
+            let p = portArray[i];
+            if (p.isFixed) continue;
+            let sum_GP = 0;
+            for (let j = 0; j < p.connections.length; j++) {
+                sum_GP += p.connections[j].G * p.connections[j].other.pressure;
+            }
+            let newP = (sum_GP + p.sum_Q) / (p.sum_G + p.connections.reduce((acc, c) => acc + c.G, 0));
+            p.pressure = p.pressure * 0.8 + newP * 0.2; // Damping
+            if (p.pressure < 0) p.pressure = 0; // Cavitation limit
+        }
+    }
+
+    // 5. Save pressures back to nodes for next frame and UI
+    appState.nodes.forEach(n => {
+        n._lastP = {};
+        COMPONENT_TYPES[n.type].ports.forEach(p => {
+            n._lastP[p.id] = physicsPorts[n.id + '_' + p.id].pressure;
+        });
+    });
+
+    // 6. Calculate Link Flows for Animation
+    appState.links.forEach(l => {
+        let p1 = physicsPorts[l.sourceNode + '_' + l.sourcePort];
+        let p2 = physicsPorts[l.targetNode + '_' + l.targetPort];
+        if (p1 && p2) {
+            l._flow = (p1.pressure - p2.pressure) * l._G;
+        }
+    });
+}
+
+// --- RENDERER ---
+function render() {
+    const canvas = document.getElementById('canvas');
+    const svgLayer = document.getElementById('svg-layer');
+
+    // Render Nodes
+    appState.nodes.forEach(node => {
+        let el = domNodes.get(node.id);
+        if (!el) {
+            el = document.createElement('div');
+            el.className = 'node';
+            el.id = 'node-' + node.id;
+            
+            // Header
+            let header = document.createElement('div');
+            header.className = 'node-header';
+            header.innerText = COMPONENT_TYPES[node.type].name;
+            header.addEventListener('mousedown', (e) => startDrag(e, node));
+            el.appendChild(header);
+
+            // Body
+            let body = document.createElement('div');
+            body.className = 'node-body';
+            el.appendChild(body);
+
+            // Ports
+            COMPONENT_TYPES[node.type].ports.forEach(p => {
+                let portEl = document.createElement('div');
+                portEl.className = 'port';
+                portEl.style.left = (p.x * 100) + '%';
+                portEl.style.top = (p.y * 100) + '%';
+                portEl.title = p.label;
+                
+                let labelEl = document.createElement('div');
+                labelEl.className = 'port-label';
+                labelEl.innerText = p.label;
+                // Position label based on port position
+                if (p.x === 0) { labelEl.style.left = '15px'; labelEl.style.top = '-5px'; }
+                else if (p.x === 1) { labelEl.style.right = '15px'; labelEl.style.top = '-5px'; }
+                else if (p.y === 0) { labelEl.style.top = '15px'; labelEl.style.left = '-5px'; }
+                else { labelEl.style.bottom = '15px'; labelEl.style.left = '-5px'; }
+                portEl.appendChild(labelEl);
+
+                portEl.addEventListener('mousedown', (e) => { e.stopPropagation(); startLink(node.id, p.id, e); });
+                portEl.addEventListener('mouseup', (e) => { e.stopPropagation(); finishLink(node.id, p.id); });
+                el.appendChild(portEl);
+            });
+
+            el.addEventListener('mousedown', () => selectItem('node', node.id));
+            canvas.appendChild(el);
+            domNodes.set(node.id, el);
+        }
+
+        // Update Position & Selection
+        el.style.left = node.x + 'px';
+        el.style.top = node.y + 'px';
+        el.classList.toggle('selected', selection.type === 'node' && selection.id === node.id);
+
+        // Update Real-time Stats in Body
+        let bodyHtml = '';
+        if (node.type === 'cylinder') {
+            bodyHtml += `<div class="cylinder-bar"><div class="cylinder-fill" style="width: ${node.state.stroke}%"></div></div>`;
+            bodyHtml += `<div class="node-stat"><span>Pos:</span><span>${node.state.stroke.toFixed(1)}%</span></div>`;
+        } else if (node.type === 'valve43') {
+            bodyHtml += `<div class="valve-control">
+                <div class="valve-btn ${node.state.lever === -1 ? 'active' : ''}" onclick="setValve('${node.id}', -1)">L</div>
+                <div class="valve-btn ${node.state.lever === 0 ? 'active' : ''}" onclick="setValve('${node.id}', 0)">C</div>
+                <div class="valve-btn ${node.state.lever === 1 ? 'active' : ''}" onclick="setValve('${node.id}', 1)">R</div>
+            </div>`;
+        } else if (node.type === 'motor') {
+            bodyHtml += `<div class="node-stat"><span>RPM:</span><span>${Math.round(node.state.rpm)}</span></div>`;
+        } else if (node.type === 'filter') {
+            bodyHtml += `<div class="filter-warning" style="display: ${node.state.clogged ? 'block' : 'none'}">CLOGGED</div>`;
+        } else if (node.type === 'cooler') {
+            bodyHtml += `<div class="node-stat"><span>Cooling:</span><span>${node.state.coolingKw.toFixed(1)} kW</span></div>`;
+        }
+
+        // Show max pressure of ports
+        if (node._lastP) {
+            let maxP = Math.max(...Object.values(node._lastP));
+            bodyHtml += `<div class="node-stat"><span>Max P:</span><span>${maxP.toFixed(1)} bar</span></div>`;
+        }
+
+        el.querySelector('.node-body').innerHTML = bodyHtml;
+    });
+
+    // Remove deleted nodes
+    for (let [id, el] of domNodes) {
+        if (!appState.nodes.find(n => n.id === id)) {
+            el.remove();
+            domNodes.delete(id);
+        }
+    }
+
+    // Render Links (SVG)
+    svgLayer.innerHTML = ''; // Clear SVG (simple approach for single file)
+    
+    appState.links.forEach(link => {
+        let n1 = appState.nodes.find(n => n.id === link.sourceNode);
+        let n2 = appState.nodes.find(n => n.id === link.targetNode);
+        if (!n1 || !n2) return;
+
+        let p1 = COMPONENT_TYPES[n1.type].ports.find(p => p.id === link.sourcePort);
+        let p2 = COMPONENT_TYPES[n2.type].ports.find(p => p.id === link.targetPort);
+
+        let x1 = n1.x + p1.x * 160; let y1 = n1.y + p1.y * (n1.type==='valve43'?80:60); // Approx height
+        let x2 = n2.x + p2.x * 160; let y2 = n2.y + p2.y * (n2.type==='valve43'?80:60);
+
+        // Adjust y for actual DOM height
+        let el1 = domNodes.get(n1.id); let el2 = domNodes.get(n2.id);
+        if (el1) { x1 = n1.x + p1.x * el1.offsetWidth; y1 = n1.y + p1.y * el1.offsetHeight; }
+        if (el2) { x2 = n2.x + p2.x * el2.offsetWidth; y2 = n2.y + p2.y * el2.offsetHeight; }
+
+        drawSvgLink(link.id, x1, y1, x2, y2, link._flow || 0, selection.type === 'link' && selection.id === link.id);
+    });
+
+    // Render Temp Link
+    if (linkState.isLinking) {
+        let n1 = appState.nodes.find(n => n.id === linkState.sourceNode);
+        let p1 = COMPONENT_TYPES[n1.type].ports.find(p => p.id === linkState.sourcePort);
+        let el1 = domNodes.get(n1.id);
+        let x1 = n1.x + p1.x * el1.offsetWidth; let y1 = n1.y + p1.y * el1.offsetHeight;
+        drawSvgLink('temp', x1, y1, linkState.tempX, linkState.tempY, 0, false);
+    }
+}
+
+function drawSvgLink(id, x1, y1, x2, y2, flow, isSelected) {
+    const svgLayer = document.getElementById('svg-layer');
+    
+    // Bezier curve logic
+    let dx = Math.abs(x2 - x1) * 0.5;
+    let dy = Math.abs(y2 - y1) * 0.5;
+    let curve = Math.max(dx, dy, 40);
+    let d = `M ${x1} ${y1} C ${x1} ${y1+curve}, ${x2} ${y2-curve}, ${x2} ${y2}`;
+    
+    // Base Path
+    let path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', 'link-path');
+    if (isSelected) path.style.stroke = 'var(--accent-hover)';
+    if (id !== 'temp') {
+        path.addEventListener('mousedown', (e) => { e.stopPropagation(); selectItem('link', id); });
+    }
+    svgLayer.appendChild(path);
+
+    // Animation Path
+    if (appState.simRunning && Math.abs(flow) > 0.1 && id !== 'temp') {
+        let animPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        animPath.setAttribute('d', d);
+        animPath.setAttribute('class', 'link-anim');
+        
+        // Flow direction and speed
+        let speed = Math.min(Math.abs(flow) * 0.5, 20);
+        let dir = flow > 0 ? -1 : 1;
+        
+        // Use a simple time-based offset for animation
+        let offset = (performance.now() / 50 * speed * dir) % 20;
+        animPath.style.strokeDashoffset = offset;
+        svgLayer.appendChild(animPath);
+    }
+}
+
+// --- INTERACTION & UI ---
+function setupEventListeners() {
+    const canvas = document.getElementById('canvas');
+
+    // Drag and Drop from Palette
+    canvas.addEventListener('dragover', e => e.preventDefault());
+    canvas.addEventListener('drop', e => {
+        e.preventDefault();
+        const type = e.dataTransfer.getData('text/plain');
+        if (COMPONENT_TYPES[type]) {
+            const rect = canvas.getBoundingClientRect();
+            addNode(type, e.clientX - rect.left - 80, e.clientY - rect.top - 30);
+        }
+    });
+
+    // Canvas Mouse Events
+    canvas.addEventListener('mousemove', e => {
+        const rect = canvas.getBoundingClientRect();
+        let mouseX = e.clientX - rect.left;
+        let mouseY = e.clientY - rect.top;
+
+        if (dragState.isDragging && dragState.node) {
+            dragState.node.x = mouseX - dragState.offsetX;
+            dragState.node.y = mouseY - dragState.offsetY;
+        }
+        if (linkState.isLinking) {
+            linkState.tempX = mouseX;
+            linkState.tempY = mouseY;
+        }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+        dragState.isDragging = false;
+        linkState.isLinking = false;
+    });
+
+    canvas.addEventListener('mousedown', (e) => {
+        if (e.target === canvas || e.target.id === 'svg-layer') {
+            selectItem(null, null);
+        }
+    });
+
+    // Toolbar
+    document.getElementById('btn-toggle-sim').addEventListener('click', (e) => {
+        appState.simRunning = !appState.simRunning;
+        e.target.innerText = appState.simRunning ? "Stop Simulation" : "Start Simulation";
+        e.target.style.backgroundColor = appState.simRunning ? "var(--danger)" : "var(--accent)";
+    });
+
+    document.getElementById('btn-export').addEventListener('click', () => {
+        // Clean state for export
+        let exportData = {
+            nodes: appState.nodes.map(n => ({ id: n.id, type: n.type, x: n.x, y: n.y, params: n.params, state: n.state })),
+            links: appState.links.map(l => ({ id: l.id, sourceNode: l.sourceNode, sourcePort: l.sourcePort, targetNode: l.targetNode, targetPort: l.targetPort, params: l.params }))
+        };
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'hydrosim_export.json'; a.click();
+    });
+
+    document.getElementById('btn-import').addEventListener('click', () => document.getElementById('file-import').click());
+    document.getElementById('file-import').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            try {
+                const data = JSON.parse(ev.target.result);
+                appState.nodes = data.nodes || [];
+                appState.links = data.links || [];
+                domNodes.clear();
+                document.getElementById('canvas').querySelectorAll('.node').forEach(n => n.remove());
+                selectItem(null, null);
+            } catch (err) { alert("Invalid JSON file."); }
+        };
+        reader.readAsText(file);
+    });
+
+    document.getElementById('btn-theme').addEventListener('click', () => {
+        const body = document.body;
+        const current = body.getAttribute('data-theme');
+        body.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark');
+    });
+}
+
+function addNode(type, x, y) {
+    let def = COMPONENT_TYPES[type];
+    let node = {
+        id: generateId(),
+        type: type,
+        x: x, y: y,
+        params: JSON.parse(JSON.stringify(def.params)),
+        state: JSON.parse(JSON.stringify(def.state))
+    };
+    appState.nodes.push(node);
+    selectItem('node', node.id);
+}
+
+function startDrag(e, node) {
+    dragState.isDragging = true;
+    dragState.node = node;
+    const rect = domNodes.get(node.id).getBoundingClientRect();
+    dragState.offsetX = e.clientX - rect.left;
+    dragState.offsetY = e.clientY - rect.top;
+}
+
+function startLink(nodeId, portId, e) {
+    linkState.isLinking = true;
+    linkState.sourceNode = nodeId;
+    linkState.sourcePort = portId;
+    const rect = document.getElementById('canvas').getBoundingClientRect();
+    linkState.tempX = e.clientX - rect.left;
+    linkState.tempY = e.clientY - rect.top;
+}
+
+function finishLink(targetNodeId, targetPortId) {
+    if (!linkState.isLinking) return;
+    if (linkState.sourceNode === targetNodeId) return; // No self link
+
+    // Check if link already exists
+    let exists = appState.links.find(l => 
+        (l.sourceNode === linkState.sourceNode && l.sourcePort === linkState.sourcePort && l.targetNode === targetNodeId && l.targetPort === targetPortId) ||
+        (l.targetNode === linkState.sourceNode && l.targetPort === linkState.sourcePort && l.sourceNode === targetNodeId && l.sourcePort === targetPortId)
+    );
+
+    if (!exists) {
+        let link = {
+            id: generateId(),
+            sourceNode: linkState.sourceNode, sourcePort: linkState.sourcePort,
+            targetNode: targetNodeId, targetPort: targetPortId,
+            params: { length: 10, diameter: 10 } // Default hose params
+        };
+        appState.links.push(link);
+        selectItem('link', link.id);
+    }
+    linkState.isLinking = false;
+}
+
+function selectItem(type, id) {
+    selection = { type, id };
+    updatePropertiesPanel();
+}
+
+function deleteSelected() {
+    if (selection.type === 'node') {
+        appState.nodes = appState.nodes.filter(n => n.id !== selection.id);
+        appState.links = appState.links.filter(l => l.sourceNode !== selection.id && l.targetNode !== selection.id);
+    } else if (selection.type === 'link') {
+        appState.links = appState.links.filter(l => l.id !== selection.id);
+    }
+    selectItem(null, null);
+}
+
+// Global function for inline HTML onclick
+window.setValve = function(nodeId, state) {
+    let node = appState.nodes.find(n => n.id === nodeId);
+    if (node) node.state.lever = state;
+};
+
+function updatePropertiesPanel() {
+    const panel = document.getElementById('properties-panel');
+    panel.innerHTML = '';
+
+    if (!selection.type) {
+        panel.innerHTML = '<div class="empty-props">Select a node or link to edit properties.</div>';
+        return;
+    }
+
+    let item, title, params;
+    if (selection.type === 'node') {
+        item = appState.nodes.find(n => n.id === selection.id);
+        if(!item) return;
+        title = COMPONENT_TYPES[item.type].name;
+        params = item.params;
+    } else {
+        item = appState.links.find(l => l.id === selection.id);
+        if(!item) return;
+        title = "Hose / Pipe";
+        params = item.params;
+    }
+
+    let html = `<div style="font-weight:bold; margin-bottom:15px; color:var(--accent)">${title}</div>`;
+    
+    for (let key in params) {
+        html += `
+            <div class="prop-group">
+                <label>${key}</label>
+                <input type="number" step="any" id="prop-${key}" value="${params[key]}">
+            </div>
+        `;
+    }
+
+    html += `<button class="danger" style="width:100%; margin-top:20px;" onclick="deleteSelected()">Delete ${selection.type}</button>`;
+    panel.innerHTML = html;
+
+    // Add listeners
+    for (let key in params) {
+        document.getElementById(`prop-${key}`).addEventListener('change', (e) => {
+            item.params[key] = parseFloat(e.target.value) || 0;
+        });
+    }
+}
+
+// --- MAIN LOOP ---
+function mainLoop(timestamp) {
+    let dt = (timestamp - lastTime) / 1000;
+    if (dt > 0.1) dt = 0.1; // Cap dt to prevent huge jumps if tab is inactive
+    lastTime = timestamp;
+
+    stepPhysics(dt);
+    render();
+
+    requestAnimationFrame(mainLoop);
+}
+
+// Start
+init();
+
+</script>
+</body>
+</html>
