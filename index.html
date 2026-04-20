@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HydroSim Pro - Thermo-Hydraulic Engine</title>
+    <title>HydroSim Pro - Heavy Machinery Edition</title>
     <style>
         :root {
             --bg-color: #121212;
@@ -22,6 +22,11 @@
             --warning: #d7ba7d;
             --success: #4caf50;
             --grid-color: rgba(255, 255, 255, 0.05);
+            
+            /* Telemetry Colors */
+            --tel-pwr: #ff4444;
+            --tel-trq: #ffcc00;
+            --tel-vol: #44aaff;
         }
 
         [data-theme="light"] {
@@ -44,7 +49,7 @@
         body { background-color: var(--bg-color); color: var(--text-main); height: 100vh; display: flex; flex-direction: column; overflow: hidden; transition: background-color 0.3s, color 0.3s; }
         
         /* Header */
-        header { height: 50px; background-color: var(--panel-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 20px; justify-content: space-between; z-index: 10; }
+        header { height: 50px; background-color: var(--panel-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 20px; justify-content: space-between; z-index: 10; flex-shrink: 0; }
         .header-title { font-weight: bold; font-size: 1.2rem; display: flex; align-items: center; gap: 10px; }
         .header-stats { font-family: monospace; font-size: 1.1rem; color: var(--warning); background: rgba(0,0,0,0.2); padding: 4px 12px; border-radius: 4px; border: 1px solid var(--border-color); }
         .toolbar { display: flex; gap: 10px; }
@@ -53,7 +58,7 @@
         button.danger { background-color: var(--danger); }
         
         /* Main Layout */
-        .main-container { display: flex; flex: 1; height: calc(100vh - 50px); }
+        .main-container { display: flex; flex: 1; height: calc(100vh - 200px); overflow: hidden; }
         
         /* Sidebars */
         .sidebar { width: 260px; background-color: var(--panel-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; z-index: 5; }
@@ -75,14 +80,14 @@
         #svg-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 1; }
         
         /* Links */
-        .link-path { fill: none; stroke: var(--link-color); stroke-width: 4; stroke-linecap: round; transition: stroke 0.3s; pointer-events: stroke; cursor: pointer; }
-        .link-path:hover { stroke-width: 6; }
-        .link-anim { fill: none; stroke: rgba(255,255,255,0.6); stroke-width: 2; stroke-dasharray: 10, 10; pointer-events: none; }
+        .link-path { fill: none; stroke: var(--link-color); stroke-width: 6; stroke-linecap: round; transition: stroke 0.3s; pointer-events: stroke; cursor: pointer; }
+        .link-path:hover { stroke-width: 8; }
+        .link-anim { fill: none; stroke: rgba(255,255,255,0.6); stroke-width: 3; stroke-dasharray: 12, 12; pointer-events: none; }
         [data-theme="light"] .link-anim { stroke: rgba(0,0,0,0.4); }
-        .link-label { font-size: 11px; font-weight: bold; fill: var(--text-main); pointer-events: none; text-anchor: middle; dominant-baseline: middle; text-shadow: 0px 0px 4px var(--bg-color), 0px 0px 4px var(--bg-color), 0px 0px 4px var(--bg-color); }
+        .link-label { font-size: 12px; font-weight: bold; fill: var(--text-main); pointer-events: none; text-anchor: middle; dominant-baseline: middle; text-shadow: 0px 0px 4px var(--bg-color), 0px 0px 4px var(--bg-color), 0px 0px 4px var(--bg-color); }
 
         /* Nodes */
-        .node { position: absolute; background-color: var(--node-bg); border: 1px solid var(--node-border); border-radius: 8px; width: 170px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 2; user-select: none; display: flex; flex-direction: column; cursor: default; }
+        .node { position: absolute; background-color: var(--node-bg); border: 1px solid var(--node-border); border-radius: 8px; width: 180px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 2; user-select: none; display: flex; flex-direction: column; cursor: default; }
         .node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
         .node-header { padding: 8px; background-color: rgba(0,0,0,0.2); border-bottom: 1px solid var(--node-border); font-size: 0.85rem; font-weight: bold; cursor: grab; border-radius: 8px 8px 0 0; text-align: center; }
         .node-header:active { cursor: grabbing; }
@@ -91,9 +96,9 @@
         .node-stat span:last-child { color: var(--text-main); font-family: monospace; font-weight: bold; }
         
         /* Ports */
-        .port { position: absolute; width: 12px; height: 12px; background-color: var(--port-color); border: 2px solid var(--node-bg); border-radius: 50%; cursor: crosshair; z-index: 3; transform: translate(-50%, -50%); transition: transform 0.2s, background-color 0.2s; }
+        .port { position: absolute; width: 14px; height: 14px; background-color: var(--port-color); border: 2px solid var(--node-bg); border-radius: 50%; cursor: crosshair; z-index: 3; transform: translate(-50%, -50%); transition: transform 0.2s, background-color 0.2s; }
         .port:hover { transform: translate(-50%, -50%) scale(1.5); background-color: var(--port-hover); }
-        .port-label { position: absolute; font-size: 0.6rem; color: var(--text-main); pointer-events: none; font-weight: bold; }
+        .port-label { position: absolute; font-size: 0.65rem; color: var(--text-main); pointer-events: none; font-weight: bold; }
 
         /* Interactive Elements & Animations */
         .valve-slider { width: 100%; cursor: pointer; accent-color: var(--accent); margin-top: 4px; }
@@ -113,6 +118,15 @@
         .prop-group label { display: block; font-size: 0.8rem; margin-bottom: 5px; color: var(--text-muted); }
         .prop-group input { width: 100%; padding: 6px; background: var(--bg-color); border: 1px solid var(--border-color); color: var(--text-main); border-radius: 4px; }
         .empty-props { text-align: center; color: var(--text-muted); font-size: 0.9rem; margin-top: 20px; }
+
+        /* Telemetry Dashboard */
+        .telemetry-panel { height: 150px; background-color: var(--panel-bg); border-top: 1px solid var(--border-color); display: flex; padding: 10px 20px; gap: 20px; z-index: 10; flex-shrink: 0; }
+        .telemetry-legend { display: flex; flex-direction: column; justify-content: center; gap: 10px; font-size: 0.85rem; min-width: 180px; }
+        .legend-item { display: flex; align-items: center; justify-content: space-between; background: rgba(0,0,0,0.2); padding: 6px 10px; border-radius: 4px; border: 1px solid var(--border-color); }
+        .legend-left { display: flex; align-items: center; gap: 8px; }
+        .legend-color { width: 14px; height: 14px; border-radius: 3px; }
+        .legend-val { font-family: monospace; font-weight: bold; color: var(--text-main); }
+        #telemetry-canvas { flex: 1; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 4px; }
     </style>
 </head>
 <body data-theme="dark">
@@ -120,7 +134,7 @@
     <header>
         <div class="header-title">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            HydroSim Pro
+            HydroSim Pro <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: normal;">Heavy Machinery Edition</span>
         </div>
         <div class="header-stats" id="sys-temp">System Temp: 20.0 °C</div>
         <div class="toolbar">
@@ -153,10 +167,29 @@
         </div>
     </div>
 
+    <!-- Telemetry Dashboard -->
+    <div class="telemetry-panel">
+        <div class="telemetry-legend">
+            <div class="legend-item">
+                <div class="legend-left"><div class="legend-color" style="background: var(--tel-pwr)"></div> Power</div>
+                <div class="legend-val" id="leg-pwr">0.0 kW</div>
+            </div>
+            <div class="legend-item">
+                <div class="legend-left"><div class="legend-color" style="background: var(--tel-trq)"></div> Torque</div>
+                <div class="legend-val" id="leg-trq">0 Nm</div>
+            </div>
+            <div class="legend-item">
+                <div class="legend-left"><div class="legend-color" style="background: var(--tel-vol)"></div> Tank Vol</div>
+                <div class="legend-val" id="leg-vol">0.0 L</div>
+            </div>
+        </div>
+        <canvas id="telemetry-canvas"></canvas>
+    </div>
+
 <script>
 /**
- * HYDROSIM PRO - Thermo-Hydraulic Engine
- * Strict Two-Wire Nodal Analysis with Capacitance, Thermodynamics, & Fuel
+ * HYDROSIM PRO - Heavy Machinery Edition
+ * Strict KCL Nodal Analysis, Proper Pump Suction, & Real-Time Telemetry
  */
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -167,11 +200,11 @@ const COMPONENT_TYPES = {
     fuelTank: {
         name: "Fuel Tank", desc: "Stores combustible fuel.",
         ports: [{ id: 'OUT', label: 'Out', x: 0.5, y: 1 }],
-        params: { capacity: 500, level: 500 }, state: {},
+        params: { capacity: 1000, level: 1000 }, state: {},
         applyPhysics: (node, portsMap) => {
             let pOut = portsMap[node.id + '_OUT'];
             pOut.isFixed = true;
-            pOut.pressure = node.params.level > 0 ? 100 : 0; // 100 bar virtual fuel pressure
+            pOut.pressure = node.params.level > 0 ? 100 : 0; 
         },
         renderUI: (node) => `
             <div class="cylinder-bar"><div class="cylinder-fill" style="width: ${(node.params.level/node.params.capacity)*100}%"></div></div>
@@ -181,13 +214,13 @@ const COMPONENT_TYPES = {
     engine: {
         name: "Thermic Engine", desc: "Consumes fuel, outputs RPM.",
         ports: [{ id: 'M', label: 'Mech', x: 1, y: 0.5 }, { id: 'F', label: 'Fuel', x: 0, y: 0.5 }],
-        params: { fuelRate: 10, efficiency: 0.8 }, state: { rpm: 0 },
+        params: { fuelRate: 55, efficiency: 1.0 }, state: { rpm: 0 }, // 55 * 40 = 2200 RPM
         applyPhysics: (node, portsMap) => {
             let pF = portsMap[node.id + '_F'], pM = portsMap[node.id + '_M'];
-            let running = pF.pressure > 10; // Needs fuel pressure
+            let running = pF.pressure > 10; 
             
             if (running) {
-                pF.sum_Q -= node.params.fuelRate; // Draw fuel
+                pF.sum_Q -= node.params.fuelRate; 
                 node.state.rpm = node.params.fuelRate * node.params.efficiency * 40;
             } else {
                 node.state.rpm = 0;
@@ -206,27 +239,36 @@ const COMPONENT_TYPES = {
         }
     },
     tank: {
-        name: "Fluid Tank", desc: "Ground reference (0 bar).",
+        name: "Hydraulic Reservoir", desc: "0-bar reference & fluid storage.",
         ports: [{ id: 'T', label: 'T', x: 0.5, y: 0 }],
-        params: {}, state: {},
+        params: { capacity: 2000, level: 1000 }, state: {},
         applyPhysics: (node, portsMap) => {
             portsMap[node.id + '_T'].isFixed = true;
             portsMap[node.id + '_T'].pressure = 0;
         },
-        renderUI: () => ``
+        renderUI: (node) => `
+            <div class="cylinder-bar"><div class="cylinder-fill" style="width: ${(node.params.level/node.params.capacity)*100}%"></div></div>
+            <div class="node-stat"><span>Level:</span><span>${node.params.level.toFixed(1)} L</span></div>
+            <button style="width:100%; margin-top:5px; padding:4px; font-size:0.75rem;" onmousedown="event.stopPropagation()" onclick="window.refillTank('${node.id}')">Refill +50L</button>
+        `
     },
     pump: {
         name: "Hydraulic Pump", desc: "Draws from IN, pushes to OUT.",
         ports: [{ id: 'M', label: 'M', x: 0, y: 0.2 }, { id: 'IN', label: 'In', x: 0, y: 0.8 }, { id: 'OUT', label: 'Out', x: 1, y: 0.5 }],
-        params: { displacement: 20 }, state: { flow: 0 },
+        params: { displacement: 130 }, state: { flow: 0 },
         applyPhysics: (node, portsMap) => {
             let pM = portsMap[node.id + '_M'], pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
             let rpm = pM.pressure;
-            let idealFlow = (rpm * node.params.displacement) / 1000; // L/min
-            node.state.flow = idealFlow;
+            let idealFlow = (rpm * node.params.displacement) / 1000; 
             
-            pIn.sum_Q -= idealFlow; 
-            pOut.sum_Q += idealFlow;
+            // Strict KCL Cavitation Logic: Pump cannot pull infinite vacuum.
+            // If pIn drops towards -1 bar, actual flow drops to 0.
+            let availableFactor = clamp(pIn.pressure + 1, 0, 1);
+            let actualFlow = idealFlow * availableFactor;
+            node.state.flow = actualFlow;
+            
+            pIn.sum_Q -= actualFlow; 
+            pOut.sum_Q += actualFlow;
             
             let G_slip = 0.05 * appState.viscosityMult;
             addConductance(pIn, pOut, G_slip);
@@ -244,7 +286,7 @@ const COMPONENT_TYPES = {
     motor: {
         name: "Hydraulic Motor", desc: "Converts Flow to RPM.",
         ports: [{ id: 'IN', label: 'In', x: 0, y: 0.2 }, { id: 'OUT', label: 'Out', x: 0, y: 0.8 }, { id: 'M', label: 'M', x: 1, y: 0.5 }],
-        params: { displacement: 20, loadResistance: 10 }, state: { rpm: 0 },
+        params: { displacement: 130, loadResistance: 10 }, state: { rpm: 0 },
         applyPhysics: (node, portsMap) => {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'], pM = portsMap[node.id + '_M'];
             let G_load = 100 / node.params.loadResistance;
@@ -263,15 +305,15 @@ const COMPONENT_TYPES = {
         }
     },
     rotaryHead: {
-        name: "Rotary Head", desc: "Mechanical load with required torque.",
+        name: "Rotary Head", desc: "Heavy mechanical load.",
         ports: [{ id: 'IN', label: 'In', x: 0, y: 0.2 }, { id: 'OUT', label: 'Out', x: 0, y: 0.8 }, { id: 'D', label: 'Dr', x: 0.5, y: 1 }],
-        params: { displacement: 500, reqTorque: 1000 }, state: { rpm: 0 },
+        params: { displacement: 1000, reqTorque: 3000 }, state: { rpm: 0 },
         applyPhysics: (node, portsMap) => {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'], pD = portsMap[node.id + '_D'];
-            let P_req = (node.params.reqTorque * 20 * Math.PI) / node.params.displacement; // bar
+            let P_req = (node.params.reqTorque * 20 * Math.PI) / node.params.displacement; 
             let dP = pIn.pressure - pOut.pressure;
             
-            let G_base = 10; 
+            let G_base = 20; 
             let G_eq = 0.001; 
             
             if (dP > P_req) G_eq = G_base * (1 - (P_req / dP));
@@ -293,13 +335,13 @@ const COMPONENT_TYPES = {
         }
     },
     drifter: {
-        name: "Percussion Drifter", desc: "Impacts when pressure exceeds threshold.",
+        name: "Percussion Drifter", desc: "Impacts at high pressure.",
         ports: [{ id: 'P', label: 'P', x: 0, y: 0.2 }, { id: 'T', label: 'T', x: 0, y: 0.8 }],
-        params: { opPressure: 130 }, state: { hz: 0, impacting: false },
+        params: { opPressure: 207 }, state: { hz: 0, impacting: false },
         applyPhysics: (node, portsMap) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
             let dP = pP.pressure - pT.pressure;
-            let G_base = 20;
+            let G_base = 30;
             let G_eq = 0.001;
             
             if (dP > node.params.opPressure) {
@@ -323,7 +365,7 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'], pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
             let x = node.state.slider / 100; 
-            let G_max = 100, G_leak = 0.001;
+            let G_max = 200, G_leak = 0.001;
             let G_PA = G_leak, G_BT = G_leak, G_PB = G_leak, G_AT = G_leak;
             
             if (x > 0) { G_PA = G_leak + G_max * (x * x); G_BT = G_leak + G_max * (x * x); }
@@ -340,10 +382,10 @@ const COMPONENT_TYPES = {
     cylinder: {
         name: "Hydraulic Cylinder", desc: "Double-acting actuator.",
         ports: [{ id: 'A', label: 'A', x: 0, y: 0.2 }, { id: 'B', label: 'B', x: 0, y: 0.8 }],
-        params: { volume: 5 }, state: { stroke: 0 },
+        params: { volume: 20 }, state: { stroke: 0 },
         applyPhysics: (node, portsMap, dt) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
-            let G = 20;
+            let G = 40;
             if (node.state.stroke <= 0 && pA.pressure < pB.pressure) G = 0.001;
             if (node.state.stroke >= 100 && pA.pressure > pB.pressure) G = 0.001;
             addConductance(pA, pB, G);
@@ -360,12 +402,12 @@ const COMPONENT_TYPES = {
     prv: {
         name: "Relief Valve", desc: "Caps max pressure.",
         ports: [{ id: 'P', label: 'P', x: 0, y: 0.5 }, { id: 'T', label: 'T', x: 1, y: 0.5 }],
-        params: { crackPressure: 150 }, state: {},
+        params: { crackPressure: 250 }, state: {},
         applyPhysics: (node, portsMap) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
             let diff = pP.pressure - pT.pressure;
             let G = 0.001;
-            if (diff > node.params.crackPressure) G = (diff - node.params.crackPressure) * 5;
+            if (diff > node.params.crackPressure) G = (diff - node.params.crackPressure) * 10;
             addConductance(pP, pT, G);
         },
         renderUI: (node) => `<div class="node-stat"><span>Set:</span><span>${node.params.crackPressure} bar</span></div>`
@@ -377,7 +419,7 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'], pX = portsMap[node.id + '_X'];
             let G = 0.001;
-            if (pA.pressure > pB.pressure || pX.pressure > (pB.pressure / node.params.pilotRatio)) G = 100;
+            if (pA.pressure > pB.pressure || pX.pressure > (pB.pressure / node.params.pilotRatio)) G = 200;
             addConductance(pA, pB, G);
         },
         renderUI: () => `<div class="node-stat"><span>Max P:</span><span class="stat-maxp">0 bar</span></div>`
@@ -393,10 +435,10 @@ const COMPONENT_TYPES = {
             let targetRatio = node.params.ratioA / (100 - node.params.ratioA);
             let currentRatio = qB === 0 ? targetRatio : qA / qB;
             
-            if (currentRatio < targetRatio) { node.state.gA += 0.5; node.state.gB -= 0.5; }
-            else { node.state.gA -= 0.5; node.state.gB += 0.5; }
+            if (currentRatio < targetRatio) { node.state.gA += 1.0; node.state.gB -= 1.0; }
+            else { node.state.gA -= 1.0; node.state.gB += 1.0; }
             
-            node.state.gA = clamp(node.state.gA, 0.1, 100); node.state.gB = clamp(node.state.gB, 0.1, 100);
+            node.state.gA = clamp(node.state.gA, 0.1, 200); node.state.gB = clamp(node.state.gB, 0.1, 200);
             addConductance(pIn, pA, node.state.gA); addConductance(pIn, pB, node.state.gB);
         },
         renderUI: (node) => `<div class="node-stat"><span>Ratio A:</span><span>${node.params.ratioA}%</span></div>`
@@ -404,10 +446,10 @@ const COMPONENT_TYPES = {
     filter: {
         name: "Hydraulic Filter", desc: "Cleans fluid, can clog.",
         ports: [{ id: 'IN', label: 'In', x: 0, y: 0.5 }, { id: 'OUT', label: 'Out', x: 1, y: 0.5 }],
-        params: { maxVolume: 1000 }, state: { volumePassed: 0, clogged: false },
+        params: { maxVolume: 5000 }, state: { volumePassed: 0, clogged: false },
         applyPhysics: (node, portsMap, dt) => {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
-            let G = node.state.clogged ? 1 : 50;
+            let G = node.state.clogged ? 2 : 100;
             addConductance(pIn, pOut, G);
             let flow = Math.abs((pIn.pressure - pOut.pressure) * G);
             node.state.volumePassed += (flow / 60) * dt;
@@ -421,7 +463,7 @@ const COMPONENT_TYPES = {
         params: { efficiency: 0.5 }, state: { coolingKw: 0 },
         applyPhysics: (node, portsMap) => {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
-            let G = 30;
+            let G = 80;
             addConductance(pIn, pOut, G);
             let flow = Math.abs((pIn.pressure - pOut.pressure) * G);
             node.state.coolingKw = flow * node.params.efficiency * 0.1;
@@ -437,6 +479,8 @@ let appState = {
     globalTemp: 20.0,
     viscosityMult: 1.0
 };
+
+let telemetry = { power: [], torque: [], volume: [], maxLen: 300 };
 
 let camera = { x: 0, y: 0, zoom: 1 };
 let isPanning = false;
@@ -514,9 +558,9 @@ function stepPhysics(dt) {
         if (def.applyPhysics) def.applyPhysics(n, physicsPorts, dt);
     });
 
-    // 4. Gauss-Seidel Iteration
+    // 4. Gauss-Seidel Iteration (Strict KCL with Capacitance)
     const portArray = Object.values(physicsPorts);
-    const C_eff = 0.005; 
+    const C_eff = 0.05; // Increased capacitance for heavy machinery stability
     const dt_safe = Math.max(dt, 0.001);
     const C_dt = C_eff / dt_safe;
 
@@ -531,7 +575,9 @@ function stepPhysics(dt) {
             }
             let newP = (C_dt * p.prevPressure + sum_GP + p.sum_Q) / (C_dt + sum_G);
             p.pressure = p.pressure * 0.8 + newP * 0.2; 
-            if (p.pressure < 0) p.pressure = 0; 
+            
+            // Allow vacuum mathematically, but cap at absolute zero (-1 bar gauge) to prevent math explosions
+            if (p.pressure < -1) p.pressure = -1; 
         }
     }
 
@@ -562,7 +608,7 @@ function stepPhysics(dt) {
         if (p1 && p2) l._flow = (p1.pressure - p2.pressure) * l._G;
     });
 
-    // 7. Update Fuel Tanks
+    // 7. Update Tanks (Fuel & Hydraulic)
     appState.nodes.forEach(n => {
         if (n.type === 'fuelTank') {
             let outFlow = 0;
@@ -575,7 +621,104 @@ function stepPhysics(dt) {
                 if (n.params.level < 0) n.params.level = 0;
             }
         }
+        if (n.type === 'tank') {
+            let netFlow = 0;
+            appState.links.forEach(l => {
+                if (l.targetNode === n.id && l.targetPort === 'T') netFlow += l._flow;
+                if (l.sourceNode === n.id && l.sourcePort === 'T') netFlow -= l._flow;
+            });
+            n.params.level += (netFlow / 60) * dt;
+            n.params.level = clamp(n.params.level, 0, n.params.capacity);
+        }
     });
+
+    updateTelemetry();
+}
+
+function updateTelemetry() {
+    if (!appState.simRunning) return;
+
+    let pwr = 0, trq = 0, vol = 0;
+    
+    let tank = appState.nodes.find(n => n.type === 'tank');
+    if (tank) vol = tank.params.level;
+
+    appState.nodes.forEach(n => {
+        if (n.type === 'rotaryHead') {
+            let pIn = physicsPorts[n.id + '_IN'];
+            let pOut = physicsPorts[n.id + '_OUT'];
+            if (pIn && pOut) {
+                let dP = Math.max(0, pIn.pressure - pOut.pressure);
+                trq = (dP * n.params.displacement) / (20 * Math.PI);
+                let flow = 0;
+                appState.links.forEach(l => {
+                    if (l.targetNode === n.id && l.targetPort === 'IN') flow += l._flow;
+                    if (l.sourceNode === n.id && l.sourcePort === 'IN') flow -= l._flow;
+                });
+                pwr += (dP * Math.abs(flow)) / 600;
+            }
+        }
+        if (n.type === 'drifter') {
+            let pP = physicsPorts[n.id + '_P'];
+            let pT = physicsPorts[n.id + '_T'];
+            if (pP && pT) {
+                let dP = Math.max(0, pP.pressure - pT.pressure);
+                let flow = 0;
+                appState.links.forEach(l => {
+                    if (l.targetNode === n.id && l.targetPort === 'P') flow += l._flow;
+                    if (l.sourceNode === n.id && l.sourcePort === 'P') flow -= l._flow;
+                });
+                pwr += (dP * Math.abs(flow)) / 600;
+            }
+        }
+    });
+
+    telemetry.power.push(pwr);
+    telemetry.torque.push(trq);
+    telemetry.volume.push(vol);
+
+    if (telemetry.power.length > telemetry.maxLen) {
+        telemetry.power.shift();
+        telemetry.torque.shift();
+        telemetry.volume.shift();
+    }
+}
+
+function drawTelemetry() {
+    const canvas = document.getElementById('telemetry-canvas');
+    const ctx = canvas.getContext('2d');
+    
+    if (canvas.width !== canvas.clientWidth) canvas.width = canvas.clientWidth;
+    if (canvas.height !== canvas.clientHeight) canvas.height = canvas.clientHeight;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const drawLine = (data, color, maxVal) => {
+        if (data.length === 0 || maxVal === 0) return;
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        let step = canvas.width / telemetry.maxLen;
+        for (let i = 0; i < data.length; i++) {
+            let x = i * step;
+            let y = canvas.height - (data[i] / maxVal) * canvas.height * 0.85 - 10; 
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    };
+
+    let maxPwr = Math.max(100, ...telemetry.power) * 1.2;
+    let maxTrq = Math.max(1000, ...telemetry.torque) * 1.2;
+    let maxVol = Math.max(100, ...telemetry.volume) * 1.2;
+
+    drawLine(telemetry.power, 'var(--tel-pwr)', maxPwr);
+    drawLine(telemetry.torque, 'var(--tel-trq)', maxTrq);
+    drawLine(telemetry.volume, 'var(--tel-vol)', maxVol);
+
+    document.getElementById('leg-pwr').innerText = (telemetry.power[telemetry.power.length-1] || 0).toFixed(1) + ' kW';
+    document.getElementById('leg-trq').innerText = (telemetry.torque[telemetry.torque.length-1] || 0).toFixed(0) + ' Nm';
+    document.getElementById('leg-vol').innerText = (telemetry.volume[telemetry.volume.length-1] || 0).toFixed(1) + ' L';
 }
 
 // --- RENDERER ---
@@ -612,10 +755,10 @@ function render() {
                 
                 let labelEl = document.createElement('div');
                 labelEl.className = 'port-label'; labelEl.innerText = p.label;
-                if (p.x <= 0.1) { labelEl.style.left = '15px'; labelEl.style.top = '-5px'; }
-                else if (p.x >= 0.9) { labelEl.style.right = '15px'; labelEl.style.top = '-5px'; }
-                else if (p.y <= 0.1) { labelEl.style.top = '15px'; labelEl.style.left = '-5px'; }
-                else { labelEl.style.bottom = '15px'; labelEl.style.left = '-5px'; }
+                if (p.x <= 0.1) { labelEl.style.left = '18px'; labelEl.style.top = '-5px'; }
+                else if (p.x >= 0.9) { labelEl.style.right = '18px'; labelEl.style.top = '-5px'; }
+                else if (p.y <= 0.1) { labelEl.style.top = '18px'; labelEl.style.left = '-5px'; }
+                else { labelEl.style.bottom = '18px'; labelEl.style.left = '-5px'; }
                 portEl.appendChild(labelEl);
 
                 portEl.addEventListener('mousedown', (e) => { e.stopPropagation(); startLink(node.id, p.id, e); });
@@ -653,6 +796,9 @@ function render() {
             badge.innerText = node.state.clogged ? 'CLOGGED' : 'CLEAN';
         } else if (node.type === 'cooler') {
             el.querySelector('.stat-cooling').innerText = node.state.coolingKw.toFixed(1) + ' kW';
+        } else if (node.type === 'tank' || node.type === 'fuelTank') {
+            el.querySelector('.cylinder-fill').style.width = (node.params.level/node.params.capacity)*100 + '%';
+            el.querySelector('.node-stat span:last-child').innerText = node.params.level.toFixed(1) + ' L';
         }
 
         let maxpEl = el.querySelector('.stat-maxp');
@@ -682,8 +828,8 @@ function render() {
         let p2 = COMPONENT_TYPES[n2.type].ports.find(p => p.id === link.targetPort);
 
         let el1 = domNodes.get(n1.id); let el2 = domNodes.get(n2.id);
-        let x1 = n1.x + p1.x * (el1 ? el1.offsetWidth : 170); let y1 = n1.y + p1.y * (el1 ? el1.offsetHeight : 100);
-        let x2 = n2.x + p2.x * (el2 ? el2.offsetWidth : 170); let y2 = n2.y + p2.y * (el2 ? el2.offsetHeight : 100);
+        let x1 = n1.x + p1.x * (el1 ? el1.offsetWidth : 180); let y1 = n1.y + p1.y * (el1 ? el1.offsetHeight : 100);
+        let x2 = n2.x + p2.x * (el2 ? el2.offsetWidth : 180); let y2 = n2.y + p2.y * (el2 ? el2.offsetHeight : 100);
 
         let p1_pressure = physicsPorts[link.sourceNode + '_' + link.sourcePort]?.pressure || 0;
         let p2_pressure = physicsPorts[link.targetNode + '_' + link.targetPort]?.pressure || 0;
@@ -698,6 +844,8 @@ function render() {
         let x1 = n1.x + p1.x * el1.offsetWidth; let y1 = n1.y + p1.y * el1.offsetHeight;
         drawSvgLink('temp', x1, y1, linkState.tempX, linkState.tempY, p1, {x:0.5, y:0.5}, 0, false, 0, 0);
     }
+
+    drawTelemetry();
 }
 
 function getPortNormal(p) {
@@ -762,7 +910,7 @@ function setupEventListeners() {
         const type = e.dataTransfer.getData('text/plain');
         if (COMPONENT_TYPES[type]) {
             const rect = canvas.getBoundingClientRect();
-            let x = (e.clientX - rect.left - camera.x) / camera.zoom - 85;
+            let x = (e.clientX - rect.left - camera.x) / camera.zoom - 90;
             let y = (e.clientY - rect.top - camera.y) / camera.zoom - 30;
             addNode(type, x, y);
         }
@@ -907,7 +1055,7 @@ function finishLink(targetNodeId, targetPortId) {
             id: generateId(),
             sourceNode: linkState.sourceNode, sourcePort: linkState.sourcePort,
             targetNode: targetNodeId, targetPort: targetPortId,
-            params: { length: 10, diameter: 10 }
+            params: { length: 10, diameter: 25 } // Heavy machinery default hose
         };
         appState.links.push(link);
         selectItem('link', link.id);
@@ -933,6 +1081,11 @@ window.deleteSelected = function() {
 window.updateValve = function(nodeId, val) {
     let node = appState.nodes.find(n => n.id === nodeId);
     if (node) node.state.slider = parseInt(val);
+};
+
+window.refillTank = function(nodeId) {
+    let node = appState.nodes.find(n => n.id === nodeId);
+    if (node) node.params.level = Math.min(node.params.capacity, node.params.level + 50);
 };
 
 function updatePropertiesPanel() {
