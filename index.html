@@ -110,8 +110,16 @@
         .status-danger { background-color: var(--danger); }
 
         .anim-gear { font-size: 1.8rem; text-align: center; animation: spin linear infinite; margin: 2px 0; display: inline-block; width: 100%; }
+        
         @keyframes spin { 100% { transform: rotate(360deg); } }
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+        @keyframes impact-shake { 
+            0% { transform: translateX(0); } 
+            25% { transform: translateX(-4px); } 
+            75% { transform: translateX(4px); } 
+            100% { transform: translateX(0); } 
+        }
+        .anim-shake { animation: impact-shake 0.1s infinite; }
 
         /* Properties Panel */
         .prop-group { margin-bottom: 15px; }
@@ -230,10 +238,11 @@ const COMPONENT_TYPES = {
         },
         renderUI: (node) => {
             let rpm = Math.abs(node.state.rpm);
-            let duration = rpm > 0 ? Math.max(0.1, 60 / rpm) : 0;
+            let running = rpm > 0;
+            let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
-                <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${rpm > 0 ? 'running' : 'paused'}">⚙️</div>
-                <div class="node-stat"><span>Status:</span><span style="color:${rpm > 0 ? 'var(--success)' : 'var(--danger)'}">${rpm > 0 ? 'RUNNING' : 'NO FUEL'}</span></div>
+                <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}">⚙️</div>
+                <div class="node-stat"><span>Status:</span><span class="stat-engine-status" style="color:${running ? 'var(--success)' : 'var(--danger)'}">${running ? 'RUNNING' : 'NO FUEL'}</span></div>
                 <div class="node-stat"><span>Output:</span><span class="stat-rpm">${Math.round(rpm)} RPM</span></div>
             `;
         }
@@ -241,15 +250,15 @@ const COMPONENT_TYPES = {
     tank: {
         name: "Hydraulic Reservoir", desc: "0-bar reference & fluid storage.",
         ports: [{ id: 'T', label: 'T', x: 0.5, y: 0 }],
-        params: { capacity: 2000, level: 1000 }, state: {},
+        params: {}, state: {},
         applyPhysics: (node, portsMap) => {
             portsMap[node.id + '_T'].isFixed = true;
             portsMap[node.id + '_T'].pressure = 0;
         },
         renderUI: (node) => `
-            <div class="cylinder-bar"><div class="cylinder-fill" style="width: ${(node.params.level/node.params.capacity)*100}%"></div></div>
-            <div class="node-stat"><span>Level:</span><span>${node.params.level.toFixed(1)} L</span></div>
-            <button style="width:100%; margin-top:5px; padding:4px; font-size:0.75rem;" onmousedown="event.stopPropagation()" onclick="window.refillTank('${node.id}')">Refill +50L</button>
+            <div class="cylinder-bar"><div class="cylinder-fill stat-tank-fill" style="width: ${(appState.hydraulicLevel/appState.hydraulicCapacity)*100}%"></div></div>
+            <div class="node-stat"><span>Level:</span><span class="stat-tank-level">${appState.hydraulicLevel.toFixed(1)} L</span></div>
+            <button style="width:100%; margin-top:5px; padding:4px; font-size:0.75rem;" onmousedown="event.stopPropagation()" onclick="window.refillTank()">Refill +50L</button>
         `
     },
     pump: {
@@ -353,9 +362,11 @@ const COMPONENT_TYPES = {
             addConductance(pP, pT, G_eq);
             node.state.hz = (dP * G_eq) * 0.8; 
         },
-        renderUI: () => `
-            <div class="status-badge stat-drifter-status status-idle">IDLE</div>
-            <div class="node-stat"><span>Freq:</span><span class="stat-hz">0 Hz</span></div>
+        renderUI: (node) => `
+            <div class="drifter-wrapper ${node.state.impacting ? 'anim-shake' : ''}">
+                <div class="status-badge stat-drifter-status ${node.state.impacting ? 'status-active' : 'status-idle'}">${node.state.impacting ? 'IMPACTING' : 'IDLE'}</div>
+                <div class="node-stat"><span>Freq:</span><span class="stat-hz">${Math.round(node.state.hz)} Hz</span></div>
+            </div>
         `
     },
     valve43: {
@@ -408,7 +419,7 @@ const COMPONENT_TYPES = {
             let diff = pP.pressure - pT.pressure;
             let G = 0.001;
             if (diff > node.params.crackPressure) G = (diff - node.params.crackPressure) * 10;
-            addConductance(pP, pT, G);
+            addConductance(pP, pT, G); // Strict KCL: Flow out of P equals flow into T
         },
         renderUI: (node) => `<div class="node-stat"><span>Set:</span><span>${node.params.crackPressure} bar</span></div>`
     },
@@ -477,7 +488,9 @@ let appState = {
     nodes: [], links: [],
     simRunning: false,
     globalTemp: 20.0,
-    viscosityMult: 1.0
+    viscosityMult: 1.0,
+    hydraulicLevel: 1000,
+    hydraulicCapacity: 2000
 };
 
 let telemetry = { power: [], torque: [], volume: [], maxLen: 300 };
@@ -558,13 +571,14 @@ function stepPhysics(dt) {
         if (def.applyPhysics) def.applyPhysics(n, physicsPorts, dt);
     });
 
-    // 4. Gauss-Seidel Iteration (Strict KCL with Capacitance)
+    // 4. Gauss-Seidel Iteration (Strict KCL with Stiff Capacitance)
     const portArray = Object.values(physicsPorts);
-    const C_eff = 0.05; // Increased capacitance for heavy machinery stability
+    const C_eff = 0.01; // Stiffened capacitance to force KCL convergence
     const dt_safe = Math.max(dt, 0.001);
     const C_dt = C_eff / dt_safe;
 
-    for (let iter = 0; iter < 40; iter++) {
+    // Increased iterations to 500 to guarantee convergence on stiff networks
+    for (let iter = 0; iter < 500; iter++) {
         for (let i = 0; i < portArray.length; i++) {
             let p = portArray[i];
             if (p.isFixed) continue;
@@ -608,7 +622,8 @@ function stepPhysics(dt) {
         if (p1 && p2) l._flow = (p1.pressure - p2.pressure) * l._G;
     });
 
-    // 7. Update Tanks (Fuel & Hydraulic)
+    // 7. Update Tanks (Fuel & Global Hydraulic)
+    let totalHydraulicNetFlow = 0;
     appState.nodes.forEach(n => {
         if (n.type === 'fuelTank') {
             let outFlow = 0;
@@ -622,15 +637,15 @@ function stepPhysics(dt) {
             }
         }
         if (n.type === 'tank') {
-            let netFlow = 0;
             appState.links.forEach(l => {
-                if (l.targetNode === n.id && l.targetPort === 'T') netFlow += l._flow;
-                if (l.sourceNode === n.id && l.sourcePort === 'T') netFlow -= l._flow;
+                if (l.targetNode === n.id && l.targetPort === 'T') totalHydraulicNetFlow += l._flow;
+                if (l.sourceNode === n.id && l.sourcePort === 'T') totalHydraulicNetFlow -= l._flow;
             });
-            n.params.level += (netFlow / 60) * dt;
-            n.params.level = clamp(n.params.level, 0, n.params.capacity);
         }
     });
+    
+    appState.hydraulicLevel += (totalHydraulicNetFlow / 60) * dt;
+    appState.hydraulicLevel = clamp(appState.hydraulicLevel, 0, appState.hydraulicCapacity);
 
     updateTelemetry();
 }
@@ -638,10 +653,8 @@ function stepPhysics(dt) {
 function updateTelemetry() {
     if (!appState.simRunning) return;
 
-    let pwr = 0, trq = 0, vol = 0;
-    
-    let tank = appState.nodes.find(n => n.type === 'tank');
-    if (tank) vol = tank.params.level;
+    let pwr = 0, trq = 0;
+    let vol = appState.hydraulicLevel;
 
     appState.nodes.forEach(n => {
         if (n.type === 'rotaryHead') {
@@ -784,8 +797,21 @@ function render() {
             el.querySelector('.stat-spool').innerText = node.state.slider + '%';
         } else if (node.type === 'motor' || node.type === 'engine' || node.type === 'rotaryHead') {
             let rpmEl = el.querySelector('.stat-rpm');
-            if(rpmEl) rpmEl.innerText = Math.round(node.state.rpm || (node.type==='engine'?node._lastP?.M:0)) + ' RPM';
+            let rpm = Math.round(node.state.rpm || (node.type==='engine'?node._lastP?.M:0));
+            if(rpmEl) rpmEl.innerText = rpm + ' RPM';
+            
+            if (node.type === 'engine') {
+                let statusSpan = el.querySelector('.stat-engine-status');
+                if (statusSpan) {
+                    let running = Math.abs(rpm) > 0;
+                    statusSpan.innerText = running ? 'RUNNING' : 'NO FUEL';
+                    statusSpan.style.color = running ? 'var(--success)' : 'var(--danger)';
+                }
+            }
         } else if (node.type === 'drifter') {
+            let wrapper = el.querySelector('.drifter-wrapper');
+            if (wrapper) wrapper.className = `drifter-wrapper ${node.state.impacting ? 'anim-shake' : ''}`;
+            
             let badge = el.querySelector('.stat-drifter-status');
             badge.className = `status-badge stat-drifter-status ${node.state.impacting ? 'status-active' : 'status-idle'}`;
             badge.innerText = node.state.impacting ? 'IMPACTING' : 'IDLE';
@@ -796,7 +822,10 @@ function render() {
             badge.innerText = node.state.clogged ? 'CLOGGED' : 'CLEAN';
         } else if (node.type === 'cooler') {
             el.querySelector('.stat-cooling').innerText = node.state.coolingKw.toFixed(1) + ' kW';
-        } else if (node.type === 'tank' || node.type === 'fuelTank') {
+        } else if (node.type === 'tank') {
+            el.querySelector('.stat-tank-fill').style.width = (appState.hydraulicLevel/appState.hydraulicCapacity)*100 + '%';
+            el.querySelector('.stat-tank-level').innerText = appState.hydraulicLevel.toFixed(1) + ' L';
+        } else if (node.type === 'fuelTank') {
             el.querySelector('.cylinder-fill').style.width = (node.params.level/node.params.capacity)*100 + '%';
             el.querySelector('.node-stat span:last-child').innerText = node.params.level.toFixed(1) + ' L';
         }
@@ -981,6 +1010,8 @@ function setupEventListeners() {
 
     document.getElementById('btn-export').addEventListener('click', () => {
         let exportData = {
+            hydraulicLevel: appState.hydraulicLevel,
+            hydraulicCapacity: appState.hydraulicCapacity,
             nodes: appState.nodes.map(n => ({ id: n.id, type: n.type, x: n.x, y: n.y, params: n.params, state: n.state })),
             links: appState.links.map(l => ({ id: l.id, sourceNode: l.sourceNode, sourcePort: l.sourcePort, targetNode: l.targetNode, targetPort: l.targetPort, params: l.params }))
         };
@@ -996,6 +1027,8 @@ function setupEventListeners() {
         reader.onload = (ev) => {
             try {
                 const data = JSON.parse(ev.target.result);
+                appState.hydraulicLevel = data.hydraulicLevel !== undefined ? data.hydraulicLevel : 1000;
+                appState.hydraulicCapacity = data.hydraulicCapacity !== undefined ? data.hydraulicCapacity : 2000;
                 appState.nodes = data.nodes || []; appState.links = data.links || [];
                 domNodes.clear(); document.getElementById('world').querySelectorAll('.node').forEach(n => n.remove());
                 selectItem(null, null);
@@ -1083,9 +1116,8 @@ window.updateValve = function(nodeId, val) {
     if (node) node.state.slider = parseInt(val);
 };
 
-window.refillTank = function(nodeId) {
-    let node = appState.nodes.find(n => n.id === nodeId);
-    if (node) node.params.level = Math.min(node.params.capacity, node.params.level + 50);
+window.refillTank = function() {
+    appState.hydraulicLevel = Math.min(appState.hydraulicCapacity, appState.hydraulicLevel + 50);
 };
 
 function updatePropertiesPanel() {
