@@ -119,7 +119,7 @@
             75% { transform: translateX(4px); } 
             100% { transform: translateX(0); } 
         }
-        .anim-shake { animation: impact-shake 0.1s infinite; }
+        .anim-shake { animation: impact-shake 0.1s infinite; display: inline-block; width: 100%; }
 
         /* Properties Panel */
         .prop-group { margin-bottom: 15px; }
@@ -197,7 +197,7 @@
 <script>
 /**
  * HYDROSIM PRO - Heavy Machinery Edition
- * Strict KCL Nodal Analysis, Proper Pump Suction, & Real-Time Telemetry
+ * Strict KCL Nodal Analysis (SOR Solver), Proper Pump Suction, & Real-Time Telemetry
  */
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -323,7 +323,7 @@ const COMPONENT_TYPES = {
             let dP = pIn.pressure - pOut.pressure;
             
             let G_base = 20; 
-            let G_eq = 0.001; 
+            let G_eq = 1e-6; 
             
             if (dP > P_req) G_eq = G_base * (1 - (P_req / dP));
             
@@ -351,7 +351,7 @@ const COMPONENT_TYPES = {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
             let dP = pP.pressure - pT.pressure;
             let G_base = 30;
-            let G_eq = 0.001;
+            let G_eq = 1e-6;
             
             if (dP > node.params.opPressure) {
                 G_eq = G_base * (1 - (node.params.opPressure / dP));
@@ -376,7 +376,7 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'], pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
             let x = node.state.slider / 100; 
-            let G_max = 200, G_leak = 0.001;
+            let G_max = 200, G_leak = 1e-6;
             let G_PA = G_leak, G_BT = G_leak, G_PB = G_leak, G_AT = G_leak;
             
             if (x > 0) { G_PA = G_leak + G_max * (x * x); G_BT = G_leak + G_max * (x * x); }
@@ -397,8 +397,8 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap, dt) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
             let G = 40;
-            if (node.state.stroke <= 0 && pA.pressure < pB.pressure) G = 0.001;
-            if (node.state.stroke >= 100 && pA.pressure > pB.pressure) G = 0.001;
+            if (node.state.stroke <= 0 && pA.pressure < pB.pressure) G = 1e-6;
+            if (node.state.stroke >= 100 && pA.pressure > pB.pressure) G = 1e-6;
             addConductance(pA, pB, G);
             
             let flow = (pA.pressure - pB.pressure) * G;
@@ -417,8 +417,12 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
             let diff = pP.pressure - pT.pressure;
-            let G = 0.001;
-            if (diff > node.params.crackPressure) G = (diff - node.params.crackPressure) * 10;
+            let G = 1e-6;
+            if (diff > node.params.crackPressure) {
+                let excess = diff - node.params.crackPressure;
+                // Quadratic easing for smooth but firm opening to prevent math explosions
+                G = 1e-6 + Math.min(excess * excess * 0.5, 500);
+            }
             addConductance(pP, pT, G); // Strict KCL: Flow out of P equals flow into T
         },
         renderUI: (node) => `<div class="node-stat"><span>Set:</span><span>${node.params.crackPressure} bar</span></div>`
@@ -429,8 +433,11 @@ const COMPONENT_TYPES = {
         params: { pilotRatio: 3 }, state: {},
         applyPhysics: (node, portsMap) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'], pX = portsMap[node.id + '_X'];
-            let G = 0.001;
-            if (pA.pressure > pB.pressure || pX.pressure > (pB.pressure / node.params.pilotRatio)) G = 200;
+            let G = 1e-6;
+            let pilotThreshold = pB.pressure / node.params.pilotRatio;
+            if (pA.pressure > pB.pressure + 0.1 || pX.pressure > pilotThreshold) {
+                G = 200;
+            }
             addConductance(pA, pB, G);
         },
         renderUI: () => `<div class="node-stat"><span>Max P:</span><span class="stat-maxp">0 bar</span></div>`
@@ -571,28 +578,37 @@ function stepPhysics(dt) {
         if (def.applyPhysics) def.applyPhysics(n, physicsPorts, dt);
     });
 
-    // 4. Gauss-Seidel Iteration (Strict KCL with Stiff Capacitance)
+    // 4. Successive Over-Relaxation (SOR) Iteration (Strict KCL)
     const portArray = Object.values(physicsPorts);
-    const C_eff = 0.01; // Stiffened capacitance to force KCL convergence
+    const C_eff = 0.0001; // Drastically reduced to eliminate "spongy" capacitance
     const dt_safe = Math.max(dt, 0.001);
     const C_dt = C_eff / dt_safe;
+    const omega = 1.3; // SOR acceleration factor
 
-    // Increased iterations to 500 to guarantee convergence on stiff networks
-    for (let iter = 0; iter < 500; iter++) {
+    for (let iter = 0; iter < 2000; iter++) {
+        let max_delta_P = 0;
         for (let i = 0; i < portArray.length; i++) {
             let p = portArray[i];
             if (p.isFixed) continue;
+            
             let sum_GP = 0, sum_G = 0;
             for (let j = 0; j < p.connections.length; j++) {
                 sum_GP += p.connections[j].G * p.connections[j].other.pressure;
                 sum_G += p.connections[j].G;
             }
-            let newP = (C_dt * p.prevPressure + sum_GP + p.sum_Q) / (C_dt + sum_G);
-            p.pressure = p.pressure * 0.8 + newP * 0.2; 
             
-            // Allow vacuum mathematically, but cap at absolute zero (-1 bar gauge) to prevent math explosions
-            if (p.pressure < -1) p.pressure = -1; 
+            let calcP = (C_dt * p.prevPressure + sum_GP + p.sum_Q) / (C_dt + sum_G);
+            let newP = p.pressure + omega * (calcP - p.pressure);
+            
+            // Allow vacuum mathematically, but cap at absolute zero (-1 bar gauge)
+            if (newP < -1) newP = -1; 
+            
+            let delta = Math.abs(newP - p.pressure);
+            if (delta > max_delta_P) max_delta_P = delta;
+            
+            p.pressure = newP;
         }
+        if (max_delta_P < 0.01) break; // Early convergence
     }
 
     // 5. Thermodynamics
@@ -615,7 +631,7 @@ function stepPhysics(dt) {
     appState.globalTemp -= (appState.globalTemp - 20) * 0.05 * dt; 
     appState.globalTemp = Math.max(20, appState.globalTemp);
 
-    // 6. Calculate Link Flows
+    // 6. Calculate Link Flows (Post-Convergence)
     appState.links.forEach(l => {
         let p1 = physicsPorts[l.sourceNode + '_' + l.sourcePort];
         let p2 = physicsPorts[l.targetNode + '_' + l.targetPort];
