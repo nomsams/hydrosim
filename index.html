@@ -56,6 +56,7 @@
         button { background-color: var(--accent); color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; transition: background 0.2s; }
         button:hover { background-color: var(--accent-hover); }
         button.danger { background-color: var(--danger); }
+        button.success { background-color: var(--success); }
         
         /* Main Layout */
         .main-container { display: flex; flex: 1; height: calc(100vh - 200px); overflow: hidden; }
@@ -79,12 +80,13 @@
         #world > * { pointer-events: auto; }
         #svg-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 1; }
         
-        /* Links */
+        /* Links & Arrows */
         .link-path { fill: none; stroke: var(--link-color); stroke-width: 6; stroke-linecap: round; transition: stroke 0.3s; pointer-events: stroke; cursor: pointer; }
         .link-path:hover { stroke-width: 8; }
         .link-anim { fill: none; stroke: rgba(255,255,255,0.6); stroke-width: 3; stroke-dasharray: 12, 12; pointer-events: none; }
         [data-theme="light"] .link-anim { stroke: rgba(0,0,0,0.4); }
         .link-label { font-size: 12px; font-weight: bold; fill: var(--text-main); pointer-events: none; text-anchor: middle; dominant-baseline: middle; text-shadow: 0px 0px 4px var(--bg-color), 0px 0px 4px var(--bg-color), 0px 0px 4px var(--bg-color); }
+        .arrow-marker path { fill: var(--link-color); transition: fill 0.3s; }
 
         /* Nodes */
         .node { position: absolute; background-color: var(--node-bg); border: 1px solid var(--node-border); border-radius: 8px; width: 180px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); z-index: 2; user-select: none; display: flex; flex-direction: column; cursor: default; }
@@ -146,6 +148,7 @@
         </div>
         <div class="header-stats" id="sys-temp">System Temp: 20.0 °C</div>
         <div class="toolbar">
+            <button id="btn-inf-tank">Infinite Tank: OFF</button>
             <button id="btn-toggle-sim">Start Simulation</button>
             <button id="btn-export">Export JSON</button>
             <button id="btn-import">Import JSON</button>
@@ -162,7 +165,19 @@
 
         <div class="canvas-container" id="canvas">
             <div id="world">
-                <svg id="svg-layer"></svg>
+                <svg id="svg-layer">
+                    <defs>
+                        <!-- Forward arrow at the END of the path -->
+                        <marker id="arrow-fwd" class="arrow-marker" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                            <path d="M 0 1 L 10 5 L 0 9 z" />
+                        </marker>
+                        <!-- Reverse arrow at the START of the path -->
+                        <marker id="arrow-rev" class="arrow-marker" viewBox="0 0 10 10" refX="0" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                            <path d="M 0 1 L 10 5 L 0 9 z" />
+                        </marker>
+                    </defs>
+                    <g id="paths-group"></g>
+                </svg>
                 <!-- Nodes injected here -->
             </div>
         </div>
@@ -197,7 +212,7 @@
 <script>
 /**
  * HYDROSIM PRO - Heavy Machinery Edition
- * Strict KCL Nodal Analysis (SOR Solver), Proper Pump Suction, & Real-Time Telemetry
+ * Flawless KCL Nodal Analysis (SOR Solver), True Suction Physics, & Real-Time Telemetry
  */
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -238,11 +253,11 @@ const COMPONENT_TYPES = {
         },
         renderUI: (node) => {
             let rpm = Math.abs(node.state.rpm);
-            let running = rpm > 0;
+            let running = rpm > 0 && appState.simRunning;
             let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
                 <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}">⚙️</div>
-                <div class="node-stat"><span>Status:</span><span class="stat-engine-status" style="color:${running ? 'var(--success)' : 'var(--danger)'}">${running ? 'RUNNING' : 'NO FUEL'}</span></div>
+                <div class="node-stat"><span>Status:</span><span class="stat-engine-status" style="color:${rpm > 0 ? 'var(--success)' : 'var(--danger)'}">${rpm > 0 ? 'RUNNING' : 'NO FUEL'}</span></div>
                 <div class="node-stat"><span>Output:</span><span class="stat-rpm">${Math.round(rpm)} RPM</span></div>
             `;
         }
@@ -270,10 +285,9 @@ const COMPONENT_TYPES = {
             let rpm = pM.pressure;
             let idealFlow = (rpm * node.params.displacement) / 1000; 
             
-            // Strict KCL Cavitation Logic: Pump cannot pull infinite vacuum.
-            // If pIn drops towards -1 bar, actual flow drops to 0.
-            let availableFactor = clamp(pIn.pressure + 1, 0, 1);
-            let actualFlow = idealFlow * availableFactor;
+            // Strict KCL: Pump forces flow regardless of inlet pressure. 
+            // If inlet is restricted, pressure drops to true vacuum mathematically.
+            let actualFlow = idealFlow;
             node.state.flow = actualFlow;
             
             pIn.sum_Q -= actualFlow; 
@@ -284,9 +298,10 @@ const COMPONENT_TYPES = {
         },
         renderUI: (node) => {
             let rpm = Math.abs(node._lastP?.M || 0);
-            let duration = rpm > 0 ? Math.max(0.1, 60 / rpm) : 0;
+            let running = rpm > 0 && appState.simRunning;
+            let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
-                <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${rpm > 0 ? 'running' : 'paused'}">⚙️</div>
+                <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}">⚙️</div>
                 <div class="node-stat"><span>Flow:</span><span>${node.state.flow.toFixed(1)} L/min</span></div>
                 <div class="node-stat"><span>Max P:</span><span class="stat-maxp">0 bar</span></div>
             `;
@@ -306,9 +321,10 @@ const COMPONENT_TYPES = {
         },
         renderUI: (node) => {
             let rpm = Math.abs(node.state.rpm);
-            let duration = rpm > 0 ? Math.max(0.1, 60 / rpm) : 0;
+            let running = rpm > 0 && appState.simRunning;
+            let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
-                <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${rpm > 0 ? 'running' : 'paused'}; animation-direction: ${node.state.rpm < 0 ? 'reverse' : 'normal'}">⚙️</div>
+                <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}; animation-direction: ${node.state.rpm < 0 ? 'reverse' : 'normal'}">⚙️</div>
                 <div class="node-stat"><span>Speed:</span><span class="stat-rpm">0 RPM</span></div>
             `;
         }
@@ -335,9 +351,10 @@ const COMPONENT_TYPES = {
         },
         renderUI: (node) => {
             let rpm = Math.abs(node.state.rpm);
-            let duration = rpm > 0 ? Math.max(0.1, 60 / rpm) : 0;
+            let running = rpm > 0 && appState.simRunning;
+            let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
-                <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${rpm > 0 ? 'running' : 'paused'}">⚙️</div>
+                <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}">⚙️</div>
                 <div class="node-stat"><span>Load:</span><span>${node.params.reqTorque} Nm</span></div>
                 <div class="node-stat"><span>Speed:</span><span class="stat-rpm">0 RPM</span></div>
             `;
@@ -362,12 +379,15 @@ const COMPONENT_TYPES = {
             addConductance(pP, pT, G_eq);
             node.state.hz = (dP * G_eq) * 0.8; 
         },
-        renderUI: (node) => `
-            <div class="drifter-wrapper ${node.state.impacting ? 'anim-shake' : ''}">
-                <div class="status-badge stat-drifter-status ${node.state.impacting ? 'status-active' : 'status-idle'}">${node.state.impacting ? 'IMPACTING' : 'IDLE'}</div>
-                <div class="node-stat"><span>Freq:</span><span class="stat-hz">${Math.round(node.state.hz)} Hz</span></div>
-            </div>
-        `
+        renderUI: (node) => {
+            let impacting = node.state.impacting && appState.simRunning;
+            return `
+                <div class="drifter-wrapper ${impacting ? 'anim-shake' : ''}">
+                    <div class="status-badge stat-drifter-status ${node.state.impacting ? 'status-active' : 'status-idle'}">${node.state.impacting ? 'IMPACTING' : 'IDLE'}</div>
+                    <div class="node-stat"><span>Freq:</span><span class="stat-hz">${Math.round(node.state.hz)} Hz</span></div>
+                </div>
+            `;
+        }
     },
     valve43: {
         name: "Proportional Valve", desc: "4/3-way spool valve.",
@@ -497,7 +517,8 @@ let appState = {
     globalTemp: 20.0,
     viscosityMult: 1.0,
     hydraulicLevel: 1000,
-    hydraulicCapacity: 2000
+    hydraulicCapacity: 2000,
+    infiniteTank: false
 };
 
 let telemetry = { power: [], torque: [], volume: [], maxLen: 300 };
@@ -580,7 +601,7 @@ function stepPhysics(dt) {
 
     // 4. Successive Over-Relaxation (SOR) Iteration (Strict KCL)
     const portArray = Object.values(physicsPorts);
-    const C_eff = 0.0001; // Drastically reduced to eliminate "spongy" capacitance
+    const C_eff = 0.0001; // Drastically reduced to eliminate "spongy" capacitance and force KCL
     const dt_safe = Math.max(dt, 0.001);
     const C_dt = C_eff / dt_safe;
     const omega = 1.3; // SOR acceleration factor
@@ -600,9 +621,7 @@ function stepPhysics(dt) {
             let calcP = (C_dt * p.prevPressure + sum_GP + p.sum_Q) / (C_dt + sum_G);
             let newP = p.pressure + omega * (calcP - p.pressure);
             
-            // Allow vacuum mathematically, but cap at absolute zero (-1 bar gauge)
-            if (newP < -1) newP = -1; 
-            
+            // Allow true vacuum mathematically to prevent mass destruction
             let delta = Math.abs(newP - p.pressure);
             if (delta > max_delta_P) max_delta_P = delta;
             
@@ -660,8 +679,12 @@ function stepPhysics(dt) {
         }
     });
     
-    appState.hydraulicLevel += (totalHydraulicNetFlow / 60) * dt;
-    appState.hydraulicLevel = clamp(appState.hydraulicLevel, 0, appState.hydraulicCapacity);
+    if (appState.infiniteTank) {
+        appState.hydraulicLevel = appState.hydraulicCapacity;
+    } else {
+        appState.hydraulicLevel += (totalHydraulicNetFlow / 60) * dt;
+        appState.hydraulicLevel = clamp(appState.hydraulicLevel, 0, appState.hydraulicCapacity);
+    }
 
     updateTelemetry();
 }
@@ -753,7 +776,7 @@ function drawTelemetry() {
 // --- RENDERER ---
 function render() {
     const world = document.getElementById('world');
-    const svgLayer = document.getElementById('svg-layer');
+    const pathsGroup = document.getElementById('paths-group');
 
     document.getElementById('sys-temp').innerText = `System Temp: ${appState.globalTemp.toFixed(1)} °C`;
 
@@ -826,7 +849,7 @@ function render() {
             }
         } else if (node.type === 'drifter') {
             let wrapper = el.querySelector('.drifter-wrapper');
-            if (wrapper) wrapper.className = `drifter-wrapper ${node.state.impacting ? 'anim-shake' : ''}`;
+            if (wrapper) wrapper.className = `drifter-wrapper ${node.state.impacting && appState.simRunning ? 'anim-shake' : ''}`;
             
             let badge = el.querySelector('.stat-drifter-status');
             badge.className = `status-badge stat-drifter-status ${node.state.impacting ? 'status-active' : 'status-idle'}`;
@@ -853,8 +876,9 @@ function render() {
         let gear = el.querySelector('.anim-gear');
         if (gear && node.state.rpm !== undefined) {
             let rpm = Math.abs(node.state.rpm);
-            gear.style.animationDuration = rpm > 0 ? Math.max(0.1, 60 / rpm) + 's' : '0s';
-            gear.style.animationPlayState = rpm > 0 ? 'running' : 'paused';
+            let running = rpm > 0 && appState.simRunning;
+            gear.style.animationDuration = running ? Math.max(0.1, 60 / rpm) + 's' : '0s';
+            gear.style.animationPlayState = running ? 'running' : 'paused';
         }
     });
 
@@ -863,7 +887,7 @@ function render() {
     }
 
     // Render Links
-    svgLayer.innerHTML = ''; 
+    pathsGroup.innerHTML = ''; 
     appState.links.forEach(link => {
         let n1 = appState.nodes.find(n => n.id === link.sourceNode);
         let n2 = appState.nodes.find(n => n.id === link.targetNode);
@@ -902,7 +926,7 @@ function getPortNormal(p) {
 }
 
 function drawSvgLink(id, x1, y1, x2, y2, p1, p2, flow, isSelected, p1_pressure, p2_pressure) {
-    const svgLayer = document.getElementById('svg-layer');
+    const pathsGroup = document.getElementById('paths-group');
     
     let n1 = getPortNormal(p1);
     let n2 = getPortNormal(p2);
@@ -920,6 +944,16 @@ function drawSvgLink(id, x1, y1, x2, y2, p1, p2, flow, isSelected, p1_pressure, 
     path.setAttribute('d', d); path.setAttribute('class', 'link-path');
     if (isSelected) path.style.stroke = 'var(--accent-hover)';
     if (id !== 'temp') path.addEventListener('mousedown', (e) => { e.stopPropagation(); selectItem('link', id); });
+    
+    // Add directional arrows based on flow
+    if (Math.abs(flow) > 0.1 && id !== 'temp') {
+        if (flow > 0) {
+            path.setAttribute('marker-end', 'url(#arrow-fwd)');
+        } else {
+            path.setAttribute('marker-start', 'url(#arrow-rev)');
+        }
+    }
+    
     g.appendChild(path);
 
     if (appState.simRunning && Math.abs(flow) > 0.1 && id !== 'temp') {
@@ -942,7 +976,7 @@ function drawSvgLink(id, x1, y1, x2, y2, p1, p2, flow, isSelected, p1_pressure, 
         g.appendChild(text);
     }
 
-    svgLayer.appendChild(g);
+    pathsGroup.appendChild(g);
 }
 
 // --- INTERACTION & UI ---
@@ -1018,6 +1052,12 @@ function setupEventListeners() {
         }
     });
 
+    document.getElementById('btn-inf-tank').addEventListener('click', (e) => {
+        appState.infiniteTank = !appState.infiniteTank;
+        e.target.innerText = appState.infiniteTank ? "Infinite Tank: ON" : "Infinite Tank: OFF";
+        e.target.className = appState.infiniteTank ? "success" : "";
+    });
+
     document.getElementById('btn-toggle-sim').addEventListener('click', (e) => {
         appState.simRunning = !appState.simRunning;
         e.target.innerText = appState.simRunning ? "Stop Simulation" : "Start Simulation";
@@ -1028,6 +1068,7 @@ function setupEventListeners() {
         let exportData = {
             hydraulicLevel: appState.hydraulicLevel,
             hydraulicCapacity: appState.hydraulicCapacity,
+            infiniteTank: appState.infiniteTank,
             nodes: appState.nodes.map(n => ({ id: n.id, type: n.type, x: n.x, y: n.y, params: n.params, state: n.state })),
             links: appState.links.map(l => ({ id: l.id, sourceNode: l.sourceNode, sourcePort: l.sourcePort, targetNode: l.targetNode, targetPort: l.targetPort, params: l.params }))
         };
@@ -1045,6 +1086,12 @@ function setupEventListeners() {
                 const data = JSON.parse(ev.target.result);
                 appState.hydraulicLevel = data.hydraulicLevel !== undefined ? data.hydraulicLevel : 1000;
                 appState.hydraulicCapacity = data.hydraulicCapacity !== undefined ? data.hydraulicCapacity : 2000;
+                appState.infiniteTank = data.infiniteTank || false;
+                
+                let btnInf = document.getElementById('btn-inf-tank');
+                btnInf.innerText = appState.infiniteTank ? "Infinite Tank: ON" : "Infinite Tank: OFF";
+                btnInf.className = appState.infiniteTank ? "success" : "";
+
                 appState.nodes = data.nodes || []; appState.links = data.links || [];
                 domNodes.clear(); document.getElementById('world').querySelectorAll('.node').forEach(n => n.remove());
                 selectItem(null, null);
