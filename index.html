@@ -167,11 +167,9 @@
             <div id="world">
                 <svg id="svg-layer">
                     <defs>
-                        <!-- Forward arrow at the END of the path -->
                         <marker id="arrow-fwd" class="arrow-marker" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto">
                             <path d="M 0 1 L 10 5 L 0 9 z" />
                         </marker>
-                        <!-- Reverse arrow at the START of the path -->
                         <marker id="arrow-rev" class="arrow-marker" viewBox="0 0 10 10" refX="0" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                             <path d="M 0 1 L 10 5 L 0 9 z" />
                         </marker>
@@ -212,7 +210,7 @@
 <script>
 /**
  * HYDROSIM PRO - Heavy Machinery Edition
- * Flawless KCL Nodal Analysis (SOR Solver), True Suction Physics, & Real-Time Telemetry
+ * Flawless KCL Nodal Analysis (SOR Solver), Flow-Residual Convergence, & Real-Time Telemetry
  */
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -237,13 +235,14 @@ const COMPONENT_TYPES = {
     engine: {
         name: "Thermic Engine", desc: "Consumes fuel, outputs RPM.",
         ports: [{ id: 'M', label: 'Mech', x: 1, y: 0.5 }, { id: 'F', label: 'Fuel', x: 0, y: 0.5 }],
-        params: { fuelRate: 55, efficiency: 1.0 }, state: { rpm: 0 }, // 55 * 40 = 2200 RPM
+        params: { fuelRate: 55, efficiency: 1.0 }, state: { rpm: 0 }, 
         applyPhysics: (node, portsMap) => {
             let pF = portsMap[node.id + '_F'], pM = portsMap[node.id + '_M'];
-            let running = pF.pressure > 10; 
+            let fuelTank = appState.nodes.find(n => n.type === 'fuelTank');
+            let hasFuel = pF.pressure > 1 && fuelTank && fuelTank.params.level > 0;
             
-            if (running) {
-                pF.sum_Q -= node.params.fuelRate; 
+            if (hasFuel) {
+                pF.sum_Q -= node.params.fuelRate; // Act as a constant current sink during solver
                 node.state.rpm = node.params.fuelRate * node.params.efficiency * 40;
             } else {
                 node.state.rpm = 0;
@@ -251,13 +250,25 @@ const COMPONENT_TYPES = {
             pM.isFixed = true;
             pM.pressure = node.state.rpm;
         },
+        updateState: (node, portsMap) => {
+            let pF = portsMap[node.id + '_F'], pM = portsMap[node.id + '_M'];
+            let fuelTank = appState.nodes.find(n => n.type === 'fuelTank');
+            let hasFuel = pF.pressure > 1 && fuelTank && fuelTank.params.level > 0;
+            
+            if (hasFuel) {
+                node.state.rpm = node.params.fuelRate * node.params.efficiency * 40;
+            } else {
+                node.state.rpm = 0;
+            }
+            pM.pressure = node.state.rpm;
+        },
         renderUI: (node) => {
             let rpm = Math.abs(node.state.rpm);
-            let running = rpm > 0 && appState.simRunning;
+            let running = rpm > 1.0 && appState.simRunning; // Deadband to prevent micro-spinning
             let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
                 <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}">⚙️</div>
-                <div class="node-stat"><span>Status:</span><span class="stat-engine-status" style="color:${rpm > 0 ? 'var(--success)' : 'var(--danger)'}">${rpm > 0 ? 'RUNNING' : 'NO FUEL'}</span></div>
+                <div class="node-stat"><span>Status:</span><span class="stat-engine-status" style="color:${running ? 'var(--success)' : 'var(--danger)'}">${running ? 'RUNNING' : 'NO FUEL'}</span></div>
                 <div class="node-stat"><span>Output:</span><span class="stat-rpm">${Math.round(rpm)} RPM</span></div>
             `;
         }
@@ -284,11 +295,8 @@ const COMPONENT_TYPES = {
             let pM = portsMap[node.id + '_M'], pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
             let rpm = pM.pressure;
             let idealFlow = (rpm * node.params.displacement) / 1000; 
-            
-            // Strict KCL: Pump forces flow regardless of inlet pressure. 
-            // If inlet is restricted, pressure drops to true vacuum mathematically.
-            let actualFlow = idealFlow;
-            node.state.flow = actualFlow;
+            let availableFactor = clamp(pIn.pressure + 1, 0, 1);
+            let actualFlow = idealFlow * availableFactor;
             
             pIn.sum_Q -= actualFlow; 
             pOut.sum_Q += actualFlow;
@@ -296,9 +304,16 @@ const COMPONENT_TYPES = {
             let G_slip = 0.05 * appState.viscosityMult;
             addConductance(pIn, pOut, G_slip);
         },
+        updateState: (node, portsMap) => {
+            let pM = portsMap[node.id + '_M'], pIn = portsMap[node.id + '_IN'];
+            let rpm = pM.pressure;
+            let idealFlow = (rpm * node.params.displacement) / 1000; 
+            let availableFactor = clamp(pIn.pressure + 1, 0, 1);
+            node.state.flow = idealFlow * availableFactor;
+        },
         renderUI: (node) => {
             let rpm = Math.abs(node._lastP?.M || 0);
-            let running = rpm > 0 && appState.simRunning;
+            let running = rpm > 1.0 && appState.simRunning;
             let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
                 <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}">⚙️</div>
@@ -315,13 +330,18 @@ const COMPONENT_TYPES = {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'], pM = portsMap[node.id + '_M'];
             let G_load = 100 / node.params.loadResistance;
             addConductance(pIn, pOut, G_load);
+            pM.isFixed = true;
+        },
+        updateState: (node, portsMap) => {
+            let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'], pM = portsMap[node.id + '_M'];
+            let G_load = 100 / node.params.loadResistance;
             let flow = (pIn.pressure - pOut.pressure) * G_load;
             node.state.rpm = (flow * 1000) / node.params.displacement;
-            pM.isFixed = true; pM.pressure = Math.max(0, node.state.rpm);
+            pM.pressure = Math.max(0, node.state.rpm);
         },
         renderUI: (node) => {
             let rpm = Math.abs(node.state.rpm);
-            let running = rpm > 0 && appState.simRunning;
+            let running = rpm > 1.0 && appState.simRunning;
             let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
                 <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}; animation-direction: ${node.state.rpm < 0 ? 'reverse' : 'normal'}">⚙️</div>
@@ -333,25 +353,37 @@ const COMPONENT_TYPES = {
         name: "Rotary Head", desc: "Heavy mechanical load.",
         ports: [{ id: 'IN', label: 'In', x: 0, y: 0.2 }, { id: 'OUT', label: 'Out', x: 0, y: 0.8 }, { id: 'D', label: 'Dr', x: 0.5, y: 1 }],
         params: { displacement: 1000, reqTorque: 3000 }, state: { rpm: 0 },
-        applyPhysics: (node, portsMap) => {
+        applyPhysics: (node, portsMap, dt, dynamicConductances) => {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'], pD = portsMap[node.id + '_D'];
+            
+            let c1 = { other: pOut, G: 1e-6 };
+            let c2 = { other: pIn, G: 1e-6 };
+            pIn.connections.push(c1);
+            pOut.connections.push(c2);
+            
+            dynamicConductances.push(() => {
+                let P_req = (node.params.reqTorque * 20 * Math.PI) / node.params.displacement; 
+                let dP = pIn.pressure - pOut.pressure;
+                let G_eq = 1e-6; 
+                if (dP > P_req) G_eq = 20 * (1 - (P_req / dP));
+                c1.G = G_eq;
+                c2.G = G_eq;
+            });
+            
+            addConductance(pIn, pD, 0.05 * appState.viscosityMult); 
+        },
+        updateState: (node, portsMap) => {
+            let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
             let P_req = (node.params.reqTorque * 20 * Math.PI) / node.params.displacement; 
             let dP = pIn.pressure - pOut.pressure;
-            
-            let G_base = 20; 
             let G_eq = 1e-6; 
-            
-            if (dP > P_req) G_eq = G_base * (1 - (P_req / dP));
-            
-            addConductance(pIn, pOut, G_eq);
-            addConductance(pIn, pD, 0.05 * appState.viscosityMult); 
-            
+            if (dP > P_req) G_eq = 20 * (1 - (P_req / dP));
             let flow = dP * G_eq;
             node.state.rpm = (flow * 1000) / node.params.displacement;
         },
         renderUI: (node) => {
             let rpm = Math.abs(node.state.rpm);
-            let running = rpm > 0 && appState.simRunning;
+            let running = rpm > 1.0 && appState.simRunning;
             let duration = running ? Math.max(0.1, 60 / rpm) : 0;
             return `
                 <div class="anim-gear" style="animation-duration: ${duration}s; animation-play-state: ${running ? 'running' : 'paused'}">⚙️</div>
@@ -364,20 +396,30 @@ const COMPONENT_TYPES = {
         name: "Percussion Drifter", desc: "Impacts at high pressure.",
         ports: [{ id: 'P', label: 'P', x: 0, y: 0.2 }, { id: 'T', label: 'T', x: 0, y: 0.8 }],
         params: { opPressure: 207 }, state: { hz: 0, impacting: false },
-        applyPhysics: (node, portsMap) => {
+        applyPhysics: (node, portsMap, dt, dynamicConductances) => {
+            let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
+            
+            let c1 = { other: pT, G: 1e-6 };
+            let c2 = { other: pP, G: 1e-6 };
+            pP.connections.push(c1);
+            pT.connections.push(c2);
+            
+            dynamicConductances.push(() => {
+                let dP = pP.pressure - pT.pressure;
+                let G_eq = 1e-6;
+                if (dP > node.params.opPressure) G_eq = 30 * (1 - (node.params.opPressure / dP));
+                c1.G = G_eq;
+                c2.G = G_eq;
+            });
+        },
+        updateState: (node, portsMap) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
             let dP = pP.pressure - pT.pressure;
-            let G_base = 30;
             let G_eq = 1e-6;
-            
-            if (dP > node.params.opPressure) {
-                G_eq = G_base * (1 - (node.params.opPressure / dP));
-                node.state.impacting = true;
-            } else {
-                node.state.impacting = false;
-            }
-            addConductance(pP, pT, G_eq);
-            node.state.hz = (dP * G_eq) * 0.8; 
+            if (dP > node.params.opPressure) G_eq = 30 * (1 - (node.params.opPressure / dP));
+            let flow = dP * G_eq;
+            node.state.impacting = dP > node.params.opPressure && flow > 1.0; // Deadband
+            node.state.hz = flow * 0.8; 
         },
         renderUI: (node) => {
             let impacting = node.state.impacting && appState.simRunning;
@@ -414,13 +456,18 @@ const COMPONENT_TYPES = {
         name: "Hydraulic Cylinder", desc: "Double-acting actuator.",
         ports: [{ id: 'A', label: 'A', x: 0, y: 0.2 }, { id: 'B', label: 'B', x: 0, y: 0.8 }],
         params: { volume: 20 }, state: { stroke: 0 },
-        applyPhysics: (node, portsMap, dt) => {
+        applyPhysics: (node, portsMap) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
             let G = 40;
             if (node.state.stroke <= 0 && pA.pressure < pB.pressure) G = 1e-6;
             if (node.state.stroke >= 100 && pA.pressure > pB.pressure) G = 1e-6;
             addConductance(pA, pB, G);
-            
+        },
+        updateState: (node, portsMap, dt) => {
+            let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
+            let G = 40;
+            if (node.state.stroke <= 0 && pA.pressure < pB.pressure) G = 1e-6;
+            if (node.state.stroke >= 100 && pA.pressure > pB.pressure) G = 1e-6;
             let flow = (pA.pressure - pB.pressure) * G;
             node.state.stroke += ((flow / 60) / node.params.volume) * 100 * dt;
             node.state.stroke = clamp(node.state.stroke, 0, 100);
@@ -434,16 +481,24 @@ const COMPONENT_TYPES = {
         name: "Relief Valve", desc: "Caps max pressure.",
         ports: [{ id: 'P', label: 'P', x: 0, y: 0.5 }, { id: 'T', label: 'T', x: 1, y: 0.5 }],
         params: { crackPressure: 250 }, state: {},
-        applyPhysics: (node, portsMap) => {
+        applyPhysics: (node, portsMap, dt, dynamicConductances) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
-            let diff = pP.pressure - pT.pressure;
-            let G = 1e-6;
-            if (diff > node.params.crackPressure) {
-                let excess = diff - node.params.crackPressure;
-                // Quadratic easing for smooth but firm opening to prevent math explosions
-                G = 1e-6 + Math.min(excess * excess * 0.5, 500);
-            }
-            addConductance(pP, pT, G); // Strict KCL: Flow out of P equals flow into T
+            
+            let c1 = { other: pT, G: 1e-6 };
+            let c2 = { other: pP, G: 1e-6 };
+            pP.connections.push(c1);
+            pT.connections.push(c2);
+            
+            dynamicConductances.push(() => {
+                let diff = pP.pressure - pT.pressure;
+                let G = 1e-6;
+                if (diff > node.params.crackPressure) {
+                    let excess = diff - node.params.crackPressure;
+                    G = 1e-6 + Math.min(excess * 10, 500); // Linear easing to prevent math explosions
+                }
+                c1.G = G;
+                c2.G = G;
+            });
         },
         renderUI: (node) => `<div class="node-stat"><span>Set:</span><span>${node.params.crackPressure} bar</span></div>`
     },
@@ -451,14 +506,23 @@ const COMPONENT_TYPES = {
         name: "Pilot Check Valve", desc: "Blocks reverse flow unless piloted.",
         ports: [{ id: 'A', label: 'A', x: 0, y: 0.5 }, { id: 'B', label: 'B', x: 1, y: 0.5 }, { id: 'X', label: 'X', x: 0.5, y: 1 }],
         params: { pilotRatio: 3 }, state: {},
-        applyPhysics: (node, portsMap) => {
+        applyPhysics: (node, portsMap, dt, dynamicConductances) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'], pX = portsMap[node.id + '_X'];
-            let G = 1e-6;
-            let pilotThreshold = pB.pressure / node.params.pilotRatio;
-            if (pA.pressure > pB.pressure + 0.1 || pX.pressure > pilotThreshold) {
-                G = 200;
-            }
-            addConductance(pA, pB, G);
+            
+            let c1 = { other: pB, G: 1e-6 };
+            let c2 = { other: pA, G: 1e-6 };
+            pA.connections.push(c1);
+            pB.connections.push(c2);
+            
+            dynamicConductances.push(() => {
+                let G = 1e-6;
+                let pilotThreshold = pB.pressure / node.params.pilotRatio;
+                if (pA.pressure > pB.pressure + 0.1 || pX.pressure > pilotThreshold) {
+                    G = 200;
+                }
+                c1.G = G;
+                c2.G = G;
+            });
         },
         renderUI: () => `<div class="node-stat"><span>Max P:</span><span class="stat-maxp">0 bar</span></div>`
     },
@@ -468,6 +532,11 @@ const COMPONENT_TYPES = {
         params: { ratioA: 50 }, state: { gA: 10, gB: 10 },
         applyPhysics: (node, portsMap) => {
             let pIn = portsMap[node.id + '_IN'], pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
+            addConductance(pIn, pA, node.state.gA); 
+            addConductance(pIn, pB, node.state.gB);
+        },
+        updateState: (node, portsMap) => {
+            let pIn = portsMap[node.id + '_IN'], pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
             let qA = (pIn.pressure - pA.pressure) * node.state.gA;
             let qB = (pIn.pressure - pB.pressure) * node.state.gB;
             let targetRatio = node.params.ratioA / (100 - node.params.ratioA);
@@ -476,8 +545,8 @@ const COMPONENT_TYPES = {
             if (currentRatio < targetRatio) { node.state.gA += 1.0; node.state.gB -= 1.0; }
             else { node.state.gA -= 1.0; node.state.gB += 1.0; }
             
-            node.state.gA = clamp(node.state.gA, 0.1, 200); node.state.gB = clamp(node.state.gB, 0.1, 200);
-            addConductance(pIn, pA, node.state.gA); addConductance(pIn, pB, node.state.gB);
+            node.state.gA = clamp(node.state.gA, 0.1, 200); 
+            node.state.gB = clamp(node.state.gB, 0.1, 200);
         },
         renderUI: (node) => `<div class="node-stat"><span>Ratio A:</span><span>${node.params.ratioA}%</span></div>`
     },
@@ -485,10 +554,14 @@ const COMPONENT_TYPES = {
         name: "Hydraulic Filter", desc: "Cleans fluid, can clog.",
         ports: [{ id: 'IN', label: 'In', x: 0, y: 0.5 }, { id: 'OUT', label: 'Out', x: 1, y: 0.5 }],
         params: { maxVolume: 5000 }, state: { volumePassed: 0, clogged: false },
-        applyPhysics: (node, portsMap, dt) => {
+        applyPhysics: (node, portsMap) => {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
             let G = node.state.clogged ? 2 : 100;
             addConductance(pIn, pOut, G);
+        },
+        updateState: (node, portsMap, dt) => {
+            let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
+            let G = node.state.clogged ? 2 : 100;
             let flow = Math.abs((pIn.pressure - pOut.pressure) * G);
             node.state.volumePassed += (flow / 60) * dt;
             if (node.state.volumePassed > node.params.maxVolume) node.state.clogged = true;
@@ -503,7 +576,10 @@ const COMPONENT_TYPES = {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
             let G = 80;
             addConductance(pIn, pOut, G);
-            let flow = Math.abs((pIn.pressure - pOut.pressure) * G);
+        },
+        updateState: (node, portsMap) => {
+            let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
+            let flow = Math.abs((pIn.pressure - pOut.pressure) * 80);
             node.state.coolingKw = flow * node.params.efficiency * 0.1;
         },
         renderUI: () => `<div class="node-stat"><span>Cooling:</span><span class="stat-cooling">0.0 kW</span></div>`
@@ -568,6 +644,7 @@ function stepPhysics(dt) {
     
     appState.viscosityMult = Math.exp(0.03 * (appState.globalTemp - 20));
     frameConductances = [];
+    let dynamicConductances = [];
 
     // 1. Initialize Ports
     physicsPorts = {};
@@ -596,18 +673,23 @@ function stepPhysics(dt) {
     // 3. Apply Component Physics
     appState.nodes.forEach(n => {
         let def = COMPONENT_TYPES[n.type];
-        if (def.applyPhysics) def.applyPhysics(n, physicsPorts, dt);
+        if (def.applyPhysics) def.applyPhysics(n, physicsPorts, dt, dynamicConductances);
     });
 
-    // 4. Successive Over-Relaxation (SOR) Iteration (Strict KCL)
+    // 4. Successive Over-Relaxation (SOR) Iteration (Strict Flow-Residual KCL)
     const portArray = Object.values(physicsPorts);
     const C_eff = 0.0001; // Drastically reduced to eliminate "spongy" capacitance and force KCL
     const dt_safe = Math.max(dt, 0.001);
     const C_dt = C_eff / dt_safe;
-    const omega = 1.3; // SOR acceleration factor
+    const omega = 0.8; // Under-Relaxation for stiff non-linear systems
 
     for (let iter = 0; iter < 2000; iter++) {
-        let max_delta_P = 0;
+        // Update dynamic conductances inside the loop based on current pressures
+        for (let i = 0; i < dynamicConductances.length; i++) {
+            dynamicConductances[i]();
+        }
+
+        let max_flow_error = 0;
         for (let i = 0; i < portArray.length; i++) {
             let p = portArray[i];
             if (p.isFixed) continue;
@@ -622,15 +704,25 @@ function stepPhysics(dt) {
             let newP = p.pressure + omega * (calcP - p.pressure);
             
             // Allow true vacuum mathematically to prevent mass destruction
-            let delta = Math.abs(newP - p.pressure);
-            if (delta > max_delta_P) max_delta_P = delta;
+            if (newP < -1) newP = -1; 
+            
+            // Calculate absolute flow residual error (L/min)
+            let flow_error = Math.abs(calcP - p.pressure) * (C_dt + sum_G);
+            if (flow_error > max_flow_error) max_flow_error = flow_error;
             
             p.pressure = newP;
         }
-        if (max_delta_P < 0.01) break; // Early convergence
+        // Break if the maximum unaccounted flow anywhere in the system is less than 0.1 L/min
+        if (max_flow_error < 0.1) break; 
     }
 
-    // 5. Thermodynamics
+    // 5. Update Component States (Post-Convergence)
+    appState.nodes.forEach(n => {
+        let def = COMPONENT_TYPES[n.type];
+        if (def.updateState) def.updateState(n, physicsPorts, dt);
+    });
+
+    // 6. Thermodynamics
     let heatW = 0;
     frameConductances.forEach(c => {
         let dp = c.p1.pressure - c.p2.pressure;
@@ -650,14 +742,14 @@ function stepPhysics(dt) {
     appState.globalTemp -= (appState.globalTemp - 20) * 0.05 * dt; 
     appState.globalTemp = Math.max(20, appState.globalTemp);
 
-    // 6. Calculate Link Flows (Post-Convergence)
+    // 7. Calculate Link Flows (Post-Convergence)
     appState.links.forEach(l => {
         let p1 = physicsPorts[l.sourceNode + '_' + l.sourcePort];
         let p2 = physicsPorts[l.targetNode + '_' + l.targetPort];
         if (p1 && p2) l._flow = (p1.pressure - p2.pressure) * l._G;
     });
 
-    // 7. Update Tanks (Fuel & Global Hydraulic)
+    // 8. Update Tanks (Fuel & Global Hydraulic)
     let totalHydraulicNetFlow = 0;
     appState.nodes.forEach(n => {
         if (n.type === 'fuelTank') {
@@ -834,18 +926,22 @@ function render() {
             el.querySelector('.stat-pos').innerText = node.state.stroke.toFixed(1) + '%';
         } else if (node.type === 'valve43') {
             el.querySelector('.stat-spool').innerText = node.state.slider + '%';
-        } else if (node.type === 'motor' || node.type === 'engine' || node.type === 'rotaryHead') {
+        } else if (node.type === 'motor' || node.type === 'engine' || node.type === 'rotaryHead' || node.type === 'pump') {
             let rpmEl = el.querySelector('.stat-rpm');
-            let rpm = Math.round(node.state.rpm || (node.type==='engine'?node._lastP?.M:0));
+            let rpm = Math.round(node.state.rpm || (node.type==='engine' || node.type==='pump' ? node._lastP?.M : 0));
             if(rpmEl) rpmEl.innerText = rpm + ' RPM';
             
             if (node.type === 'engine') {
                 let statusSpan = el.querySelector('.stat-engine-status');
                 if (statusSpan) {
-                    let running = Math.abs(rpm) > 0;
+                    let running = Math.abs(rpm) > 1.0 && appState.simRunning;
                     statusSpan.innerText = running ? 'RUNNING' : 'NO FUEL';
                     statusSpan.style.color = running ? 'var(--success)' : 'var(--danger)';
                 }
+            }
+            if (node.type === 'pump') {
+                let flowEl = el.querySelector('.node-stat span:nth-child(2)');
+                if (flowEl && node.state.flow !== undefined) flowEl.innerText = node.state.flow.toFixed(1) + ' L/min';
             }
         } else if (node.type === 'drifter') {
             let wrapper = el.querySelector('.drifter-wrapper');
@@ -872,11 +968,11 @@ function render() {
         let maxpEl = el.querySelector('.stat-maxp');
         if(maxpEl) maxpEl.innerText = maxP.toFixed(1) + ' bar';
 
-        // Update animations
+        // Update animations with deadband
         let gear = el.querySelector('.anim-gear');
-        if (gear && node.state.rpm !== undefined) {
-            let rpm = Math.abs(node.state.rpm);
-            let running = rpm > 0 && appState.simRunning;
+        if (gear) {
+            let rpm = Math.abs(node.state.rpm || (node.type==='engine' || node.type==='pump' ? node._lastP?.M : 0));
+            let running = rpm > 1.0 && appState.simRunning;
             gear.style.animationDuration = running ? Math.max(0.1, 60 / rpm) + 's' : '0s';
             gear.style.animationPlayState = running ? 'running' : 'paused';
         }
@@ -945,8 +1041,9 @@ function drawSvgLink(id, x1, y1, x2, y2, p1, p2, flow, isSelected, p1_pressure, 
     if (isSelected) path.style.stroke = 'var(--accent-hover)';
     if (id !== 'temp') path.addEventListener('mousedown', (e) => { e.stopPropagation(); selectItem('link', id); });
     
-    // Add directional arrows based on flow
-    if (Math.abs(flow) > 0.1 && id !== 'temp') {
+    // Add directional arrows based on flow (Deadband applied to UI)
+    let displayFlow = Math.abs(flow) < 0.5 ? 0.0 : Math.abs(flow);
+    if (displayFlow > 0 && id !== 'temp') {
         if (flow > 0) {
             path.setAttribute('marker-end', 'url(#arrow-fwd)');
         } else {
@@ -956,10 +1053,10 @@ function drawSvgLink(id, x1, y1, x2, y2, p1, p2, flow, isSelected, p1_pressure, 
     
     g.appendChild(path);
 
-    if (appState.simRunning && Math.abs(flow) > 0.1 && id !== 'temp') {
+    if (appState.simRunning && displayFlow > 0 && id !== 'temp') {
         let animPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         animPath.setAttribute('d', d); animPath.setAttribute('class', 'link-anim');
-        let speed = Math.min(Math.abs(flow) * 0.5, 20);
+        let speed = Math.min(displayFlow * 0.5, 20);
         let dir = flow > 0 ? -1 : 1;
         animPath.style.strokeDashoffset = (performance.now() / 50 * speed * dir) % 20;
         g.appendChild(animPath);
@@ -972,7 +1069,7 @@ function drawSvgLink(id, x1, y1, x2, y2, p1, p2, flow, isSelected, p1_pressure, 
         text.setAttribute('x', midX); text.setAttribute('y', midY);
         text.setAttribute('class', 'link-label');
         let avgP = Math.max(p1_pressure, p2_pressure);
-        text.textContent = `${Math.abs(flow).toFixed(1)} L/min | ${Math.round(avgP)} bar`;
+        text.textContent = `${displayFlow.toFixed(1)} L/min | ${Math.round(avgP)} bar`;
         g.appendChild(text);
     }
 
