@@ -238,8 +238,13 @@ const COMPONENT_TYPES = {
         params: { fuelRate: 55, efficiency: 1.0 }, state: { rpm: 0 }, 
         applyPhysics: (node, portsMap) => {
             let pF = portsMap[node.id + '_F'], pM = portsMap[node.id + '_M'];
-            let fuelTank = appState.nodes.find(n => n.type === 'fuelTank');
-            let hasFuel = pF.pressure > 1 && fuelTank && fuelTank.params.level > 0;
+            
+            // Fallback: If unconnected, assume infinite internal fuel. If connected, demand fuel from tank.
+            let hasFuel = true;
+            if (pF.connections.length > 0) {
+                let fuelTank = appState.nodes.find(n => n.type === 'fuelTank');
+                hasFuel = pF.pressure > 1 && fuelTank && fuelTank.params.level > 0;
+            }
             
             if (hasFuel) {
                 pF.sum_Q -= node.params.fuelRate; // Act as a constant current sink during solver
@@ -252,8 +257,11 @@ const COMPONENT_TYPES = {
         },
         updateState: (node, portsMap) => {
             let pF = portsMap[node.id + '_F'], pM = portsMap[node.id + '_M'];
-            let fuelTank = appState.nodes.find(n => n.type === 'fuelTank');
-            let hasFuel = pF.pressure > 1 && fuelTank && fuelTank.params.level > 0;
+            let hasFuel = true;
+            if (pF.connections.length > 0) {
+                let fuelTank = appState.nodes.find(n => n.type === 'fuelTank');
+                hasFuel = pF.pressure > 1 && fuelTank && fuelTank.params.level > 0;
+            }
             
             if (hasFuel) {
                 node.state.rpm = node.params.fuelRate * node.params.efficiency * 40;
@@ -295,8 +303,11 @@ const COMPONENT_TYPES = {
             let pM = portsMap[node.id + '_M'], pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'];
             let rpm = pM.pressure;
             let idealFlow = (rpm * node.params.displacement) / 1000; 
-            let availableFactor = clamp(pIn.pressure + 1, 0, 1);
-            let actualFlow = idealFlow * availableFactor;
+            
+            // Strict KCL: Pump forces flow regardless of inlet pressure. 
+            // If inlet is restricted, pressure drops to true vacuum mathematically.
+            let actualFlow = idealFlow;
+            node.state.flow = actualFlow;
             
             pIn.sum_Q -= actualFlow; 
             pOut.sum_Q += actualFlow;
@@ -305,11 +316,10 @@ const COMPONENT_TYPES = {
             addConductance(pIn, pOut, G_slip);
         },
         updateState: (node, portsMap) => {
-            let pM = portsMap[node.id + '_M'], pIn = portsMap[node.id + '_IN'];
+            let pM = portsMap[node.id + '_M'];
             let rpm = pM.pressure;
             let idealFlow = (rpm * node.params.displacement) / 1000; 
-            let availableFactor = clamp(pIn.pressure + 1, 0, 1);
-            node.state.flow = idealFlow * availableFactor;
+            node.state.flow = idealFlow;
         },
         renderUI: (node) => {
             let rpm = Math.abs(node._lastP?.M || 0);
@@ -356,18 +366,13 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap, dt, dynamicConductances) => {
             let pIn = portsMap[node.id + '_IN'], pOut = portsMap[node.id + '_OUT'], pD = portsMap[node.id + '_D'];
             
-            let c1 = { other: pOut, G: 1e-6 };
-            let c2 = { other: pIn, G: 1e-6 };
-            pIn.connections.push(c1);
-            pOut.connections.push(c2);
-            
-            dynamicConductances.push(() => {
+            addDynamicConductance(pIn, pOut, dynamicConductances, (c1, c2) => {
                 let P_req = (node.params.reqTorque * 20 * Math.PI) / node.params.displacement; 
                 let dP = pIn.pressure - pOut.pressure;
-                let G_eq = 1e-6; 
-                if (dP > P_req) G_eq = 20 * (1 - (P_req / dP));
-                c1.G = G_eq;
-                c2.G = G_eq;
+                let targetG = 1e-6; 
+                if (dP > P_req) targetG = 20 * (1 - (P_req / dP));
+                c1.G = c1.G * 0.8 + targetG * 0.2;
+                c2.G = c2.G * 0.8 + targetG * 0.2;
             });
             
             addConductance(pIn, pD, 0.05 * appState.viscosityMult); 
@@ -399,17 +404,12 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap, dt, dynamicConductances) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
             
-            let c1 = { other: pT, G: 1e-6 };
-            let c2 = { other: pP, G: 1e-6 };
-            pP.connections.push(c1);
-            pT.connections.push(c2);
-            
-            dynamicConductances.push(() => {
+            addDynamicConductance(pP, pT, dynamicConductances, (c1, c2) => {
                 let dP = pP.pressure - pT.pressure;
-                let G_eq = 1e-6;
-                if (dP > node.params.opPressure) G_eq = 30 * (1 - (node.params.opPressure / dP));
-                c1.G = G_eq;
-                c2.G = G_eq;
+                let targetG = 1e-6;
+                if (dP > node.params.opPressure) targetG = 30 * (1 - (node.params.opPressure / dP));
+                c1.G = c1.G * 0.8 + targetG * 0.2;
+                c2.G = c2.G * 0.8 + targetG * 0.2;
             });
         },
         updateState: (node, portsMap) => {
@@ -456,12 +456,16 @@ const COMPONENT_TYPES = {
         name: "Hydraulic Cylinder", desc: "Double-acting actuator.",
         ports: [{ id: 'A', label: 'A', x: 0, y: 0.2 }, { id: 'B', label: 'B', x: 0, y: 0.8 }],
         params: { volume: 20 }, state: { stroke: 0 },
-        applyPhysics: (node, portsMap) => {
+        applyPhysics: (node, portsMap, dt, dynamicConductances) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
-            let G = 40;
-            if (node.state.stroke <= 0 && pA.pressure < pB.pressure) G = 1e-6;
-            if (node.state.stroke >= 100 && pA.pressure > pB.pressure) G = 1e-6;
-            addConductance(pA, pB, G);
+            
+            addDynamicConductance(pA, pB, dynamicConductances, (c1, c2) => {
+                let targetG = 40;
+                if (node.state.stroke <= 0 && pA.pressure < pB.pressure) targetG = 1e-6;
+                if (node.state.stroke >= 100 && pA.pressure > pB.pressure) targetG = 1e-6;
+                c1.G = c1.G * 0.8 + targetG * 0.2;
+                c2.G = c2.G * 0.8 + targetG * 0.2;
+            });
         },
         updateState: (node, portsMap, dt) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'];
@@ -484,20 +488,15 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap, dt, dynamicConductances) => {
             let pP = portsMap[node.id + '_P'], pT = portsMap[node.id + '_T'];
             
-            let c1 = { other: pT, G: 1e-6 };
-            let c2 = { other: pP, G: 1e-6 };
-            pP.connections.push(c1);
-            pT.connections.push(c2);
-            
-            dynamicConductances.push(() => {
+            addDynamicConductance(pP, pT, dynamicConductances, (c1, c2) => {
                 let diff = pP.pressure - pT.pressure;
-                let G = 1e-6;
+                let targetG = 1e-6;
                 if (diff > node.params.crackPressure) {
                     let excess = diff - node.params.crackPressure;
-                    G = 1e-6 + Math.min(excess * 10, 500); // Linear easing to prevent math explosions
+                    targetG = 1e-6 + Math.min(excess * 10, 500); // Linear easing to prevent math explosions
                 }
-                c1.G = G;
-                c2.G = G;
+                c1.G = c1.G * 0.8 + targetG * 0.2;
+                c2.G = c2.G * 0.8 + targetG * 0.2;
             });
         },
         renderUI: (node) => `<div class="node-stat"><span>Set:</span><span>${node.params.crackPressure} bar</span></div>`
@@ -509,19 +508,14 @@ const COMPONENT_TYPES = {
         applyPhysics: (node, portsMap, dt, dynamicConductances) => {
             let pA = portsMap[node.id + '_A'], pB = portsMap[node.id + '_B'], pX = portsMap[node.id + '_X'];
             
-            let c1 = { other: pB, G: 1e-6 };
-            let c2 = { other: pA, G: 1e-6 };
-            pA.connections.push(c1);
-            pB.connections.push(c2);
-            
-            dynamicConductances.push(() => {
-                let G = 1e-6;
+            addDynamicConductance(pA, pB, dynamicConductances, (c1, c2) => {
+                let targetG = 1e-6;
                 let pilotThreshold = pB.pressure / node.params.pilotRatio;
                 if (pA.pressure > pB.pressure + 0.1 || pX.pressure > pilotThreshold) {
-                    G = 200;
+                    targetG = 200;
                 }
-                c1.G = G;
-                c2.G = G;
+                c1.G = c1.G * 0.8 + targetG * 0.2;
+                c2.G = c2.G * 0.8 + targetG * 0.2;
             });
         },
         renderUI: () => `<div class="node-stat"><span>Max P:</span><span class="stat-maxp">0 bar</span></div>`
@@ -637,6 +631,14 @@ function addConductance(p1, p2, G) {
     p2.connections.push({ other: p1, G: G });
 }
 
+function addDynamicConductance(p1, p2, dynamicConductances, updateFn) {
+    let c1 = { other: p2, G: 1e-6 };
+    let c2 = { other: p1, G: 1e-6 };
+    p1.connections.push(c1);
+    p2.connections.push(c2);
+    dynamicConductances.push(() => updateFn(c1, c2));
+}
+
 function stepPhysics(dt) {
     if (!appState.simRunning) return;
     
@@ -699,9 +701,6 @@ function stepPhysics(dt) {
             
             let calcP = (C_dt * p.prevPressure + sum_GP + p.sum_Q) / (C_dt + sum_G);
             let newP = p.pressure + omega * (calcP - p.pressure);
-            
-            // Allow true vacuum mathematically to prevent mass destruction
-            if (newP < -1) newP = -1; 
             
             // Calculate absolute flow residual error (L/min)
             let flow_error = Math.abs(calcP - p.pressure) * (C_dt + sum_G);
