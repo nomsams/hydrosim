@@ -608,7 +608,6 @@ let dragState = { isDragging: false, node: null, offsetX: 0, offsetY: 0 };
 let linkState = { isLinking: false, sourceNode: null, sourcePort: null, tempX: 0, tempY: 0 };
 
 let physicsPorts = {}; 
-let frameConductances = [];
 const domNodes = new Map();
 
 // --- INITIALIZATION ---
@@ -636,14 +635,12 @@ let lastTime = performance.now();
 function addConductance(p1, p2, G) {
     p1.connections.push({ other: p2, G: G });
     p2.connections.push({ other: p1, G: G });
-    frameConductances.push({ p1, p2, G });
 }
 
 function stepPhysics(dt) {
     if (!appState.simRunning) return;
     
     appState.viscosityMult = Math.exp(0.03 * (appState.globalTemp - 20));
-    frameConductances = [];
     let dynamicConductances = [];
 
     // 1. Initialize Ports
@@ -722,13 +719,19 @@ function stepPhysics(dt) {
         if (def.updateState) def.updateState(n, physicsPorts, dt);
     });
 
-    // 6. Thermodynamics
+    // 6. Thermodynamics (Dynamic Heat Calculation)
     let heatW = 0;
-    frameConductances.forEach(c => {
-        let dp = c.p1.pressure - c.p2.pressure;
-        let q = dp * c.G;
-        heatW += Math.abs(dp * q) * 1.667; 
-    });
+    for (let i = 0; i < portArray.length; i++) {
+        let p = portArray[i];
+        for (let j = 0; j < p.connections.length; j++) {
+            let conn = p.connections[j];
+            let dp = p.pressure - conn.other.pressure;
+            if (dp > 0) { // Only count positive to avoid double counting
+                let q = dp * conn.G;
+                heatW += (dp * q) * 1.667;
+            }
+        }
+    }
 
     appState.nodes.forEach(n => {
         if (n.type === 'cooler') heatW -= n.state.coolingKw * 1000;
